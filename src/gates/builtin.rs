@@ -52,18 +52,20 @@ impl Gate for BoundaryGate {
                 format!("{} boundary verified", b.kind),
             ),
             Some(b) => {
-                let failed: Vec<&str> = b
+                // Names AND details: a check's detail is written never to contain a secret value (names only), so it is safe
+                // to show, and without it a refusal on a host nobody can inspect cannot be diagnosed.
+                let failed: Vec<String> = b
                     .checks
                     .iter()
                     .filter(|c| c.required && !c.ok)
-                    .map(|c| c.name.as_str())
+                    .map(|c| format!("{} ({})", c.name, c.detail))
                     .collect();
                 result(
                     "boundary",
                     "boundary",
                     false,
                     true,
-                    format!("required checks failed: {}", failed.join(", ")),
+                    format!("required checks failed: {}", failed.join("; ")),
                 )
             }
             None => result("boundary", "boundary", false, true, "no boundary report"),
