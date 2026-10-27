@@ -282,7 +282,8 @@ mod tests {
         write(
             &d.tree,
             ".gitattributes",
-            &format!("*.md diff=evil filter=evil\n"),
+            "*.md diff=evil filter=evil
+",
         );
         write(&d.tree, "docs/a.md", "changed\n");
         write(

@@ -5,6 +5,8 @@
 //! * `errand verify-boundary`   : print the boundary report as JSON; exit 72 if it does not verify.
 //! * `errand schema --out DIR`  : write the JSON Schemas.
 #![forbid(unsafe_code)]
+// The CLI's job is to print the digest and the boundary report.
+#![allow(clippy::print_stdout)]
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -122,6 +124,9 @@ fn run() -> Result<i32, errand_kit::ErrandError> {
             recipe,
             timeout,
             token_file,
+            base,
+            tree,
+            extra_dirs,
         } => {
             let task = Task::load(&tasks_root, &task)?;
             match phase {

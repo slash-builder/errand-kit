@@ -47,7 +47,7 @@ pub fn write_all(dir: &std::path::Path) -> crate::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use std::path::Path;
 
     use super::*;

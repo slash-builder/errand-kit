@@ -118,6 +118,10 @@ impl Recipe {
             ".git*",
             "**/.git*",
             "Makefile",
+            "**/Makefile",
+            "**/*.mk",
+            "**/Taskfile*",
+            "**/justfile",
             "**/build.rs",
             "**/*.tf",
             "**/CODEOWNERS",
@@ -258,7 +262,7 @@ mod tests {
     #[test]
     fn default_protected_is_the_documented_list() {
         let p = Recipe::default_protected();
-        assert_eq!(p.len(), 23);
+        assert_eq!(p.len(), 27);
         for g in [
             "Jenkinsfile*",
             ".github/**",
@@ -316,6 +320,9 @@ mod tests {
             ".gitignore",
             "sub/.gitattributes",
             "Makefile",
+            "svc/Makefile",
+            "mk/common.mk",
+            "Taskfile.yml",
             "crates/x/build.rs",
             "infra/main.tf",
             "docs/CODEOWNERS",
