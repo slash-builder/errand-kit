@@ -1,0 +1,52 @@
+[package]
+name = "errand-kit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+description = "Gated, sandboxed agent runs: credentials are dropped, the verdict is computed in code, and the hand-back waits for consent."
+license = "Apache-2.0"
+repository = "https://github.com/slash-builder/errand-kit"
+readme = "README.md"
+keywords = ["agents", "sandbox", "gates", "automation"]
+categories = ["development-tools"]
+# Private and internal until the contract is stable (studio rule: a Kit goes public only as a new, scrubbed repository).
+# The published crate name will be `slashbuilder-errand-kit` (context/rust-and-crates-io-standard.md, section 1).
+publish = false
+include = ["src/", "README.md", "LICENSE", "CHANGELOG.md", "spec/", "schema/", "fixtures/"]
+
+[lib]
+name = "errand_kit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "errand"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+globset = "0.4"
+schemars = { version = "0.8", features = ["preserve_order"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+print_stdout = "warn"
+
+[features]
+default = []
+# `sandbox-none` exists only for tests; a release build has no way to run a worker without a verified boundary.
+test-sandbox = []
