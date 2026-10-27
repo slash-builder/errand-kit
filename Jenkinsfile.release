@@ -86,6 +86,7 @@ pipeline {
       steps {
         withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
           sh '''
+            set +x   # Jenkins runs sh with -x: tracing would print the base64 of user:password (Jenkins masks only the plain password)
             set -eu
             mkdir -p "$CARGO_HOME"
             printf '[registries.lockamy-hosted]\\nindex = "sparse+%s/repository/cargo-hosted/"\\n' "$NEXUS_URL" > "$CARGO_HOME/config.toml"
