@@ -1,5 +1,5 @@
 //! The data contract. Every type here is serialised to JSON, has a generated JSON Schema in `schema/`, and is covered by the
-//! shared fixtures in `fixtures/`. Other implementations (the Python reference engine) and consumers (Courier, in Dart) are
+//! shared fixtures in `fixtures/`. Other implementations and consumers (for example a Dart client app) are
 //! tested against the same files.
 
 use std::fmt;
@@ -323,7 +323,7 @@ pub struct GovernorDecision {
     pub reason: String,
 }
 
-/// The engine part of the queue snapshot Courier reads.
+/// The engine part of the queue snapshot a client app reads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueEngine {
     /// The engine process is alive.
@@ -373,7 +373,7 @@ pub struct QueuePr {
     pub sha: Option<String>,
 }
 
-/// A ticket as Courier shows it.
+/// A ticket as a client app shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueTicket {
     /// The ticket key, e.g. `QR-12`.
@@ -412,7 +412,7 @@ pub struct QueueTicket {
     pub pr: Option<QueuePr>,
 }
 
-/// The snapshot the engine publishes and Courier reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.
+/// The snapshot the engine publishes and a client app reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueSnapshot {
     /// Engine state.

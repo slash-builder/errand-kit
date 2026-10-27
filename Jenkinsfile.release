@@ -1,0 +1,163 @@
+// Release of the Errand Kit. A release is a DELIBERATE act (Rust and crates.io standard, section 5): this job never runs on a push.
+// Start it by hand with the version to release (it must equal Cargo.toml's `version`).
+//
+//   1. Verify: the version matches Cargo.toml; the tag v<VERSION>, if it exists, points at this commit.
+//   2. Gates: the same scripts/ci.sh as CI, with cargo-deny REQUIRED. Then cargo package (the .crate and its SHA-256 are archived).
+//   3. Nexus (PUBLISH_NEXUS): publish to the studio's internal cargo registry. Idempotent: a version already there counts as done.
+//   4. Tag: v<VERSION> is pushed after a successful publish.
+//   5. crates.io (PUBLISH_CRATES_IO, off by default): a human `input` approval, because publishing is PERMANENT and cannot be undone,
+//      then `cargo publish` with the token from the `crates-io-token` credential. If that credential does not exist, the stage ends
+//      UNSTABLE with instructions; nothing else is affected.
+//
+// Credentials: nexus-credentials (Nexus), github-token (push the tag), crates-io-token (Jenkins secret text; a crates.io API token
+// scoped to publish-new and publish-update for slashbuilder-*, with an expiry).
+def RUST_IMAGE = 'rust:1.94'
+def DENY_VERSION = '0.20.2'
+def DENY_SHA256 = '9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f'   // cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+
+pipeline {
+  agent { label 'linux-build' }
+
+  parameters {
+    string(name: 'VERSION', defaultValue: '', description: 'Version to release, for example 0.1.0. Must equal Cargo.toml version.')
+    booleanParam(name: 'PUBLISH_NEXUS', defaultValue: true, description: 'Publish to the internal Nexus cargo registry.')
+    booleanParam(name: 'PUBLISH_CRATES_IO', defaultValue: false, description: 'Publish to crates.io (permanent; asks for approval first).')
+  }
+
+  options {
+    timeout(time: 60, unit: 'MINUTES')
+    timestamps()
+    disableConcurrentBuilds()
+  }
+
+  environment {
+    NEXUS_URL = 'https://nexus.softsurve.com'
+    CARGO_HOME = "${WORKSPACE}/.cargo"
+    RELEASE_VERSION = "${params.VERSION}"
+  }
+
+  stages {
+    stage('Verify') {
+      steps {
+        script {
+          if (!(params.VERSION ==~ /^[0-9]+\.[0-9]+\.[0-9]+$/)) {
+            error('VERSION must look like 0.1.0')
+          }
+          def cargoVersion = sh(returnStdout: true, script: 'sed -n \'s/^version = "\\(.*\\)"/\\1/p\' Cargo.toml | head -1').trim()
+          if (cargoVersion != params.VERSION) {
+            error("VERSION ${params.VERSION} does not match Cargo.toml version ${cargoVersion}")
+          }
+          currentBuild.description = "release ${params.VERSION}"
+          // The tag, if it exists, must point at THIS commit (a re-run after a partial release), never at another one.
+          sh '''
+            git fetch --tags --quiet origin || true
+            if git rev-parse -q --verify "refs/tags/v${RELEASE_VERSION}" >/dev/null; then
+              [ "$(git rev-list -n1 "v${RELEASE_VERSION}")" = "$(git rev-parse HEAD)" ] || { echo "tag v${RELEASE_VERSION} is on a different commit; refusing" >&2; exit 1; }
+            fi
+          '''
+        }
+      }
+    }
+
+    stage('Gates and package') {
+      agent { docker { image RUST_IMAGE; args '-u root'; reuseNode true } }
+      steps {
+        sh """
+          set -eu
+          curl -fsSLo /tmp/deny.tgz "https://github.com/EmbarkStudios/cargo-deny/releases/download/${DENY_VERSION}/cargo-deny-${DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${DENY_SHA256}  /tmp/deny.tgz" | sha256sum -c -
+          tar -xzf /tmp/deny.tgz -C /tmp
+          install -m 0755 /tmp/cargo-deny-${DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny /usr/local/bin/cargo-deny
+          git config --global --add safe.directory "\$WORKSPACE"
+          REQUIRE_DENY=1 bash scripts/ci.sh
+          cargo package --locked
+          mkdir -p dist && cp target/package/*.crate dist/
+          (cd dist && sha256sum *.crate > SHA256SUMS)
+        """
+      }
+      post {
+        always { sh 'chown -R "$(stat -c "%u:%g" "$WORKSPACE/.git")" "$WORKSPACE" 2>/dev/null || true' }
+      }
+    }
+
+    stage('Publish to Nexus') {
+      when { expression { params.PUBLISH_NEXUS } }
+      agent { docker { image RUST_IMAGE; args '-u root'; reuseNode true } }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'nexus-credentials', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+          sh '''
+            set -eu
+            mkdir -p "$CARGO_HOME"
+            printf '[registries.lockamy-hosted]\\nindex = "sparse+%s/repository/cargo-hosted/"\\n' "$NEXUS_URL" > "$CARGO_HOME/config.toml"
+            # Nexus speaks HTTP Basic; cargo sends the token verbatim, so it must be "Basic <base64(user:pass)>".
+            printf '[registries.lockamy-hosted]\\ntoken = "Basic %s"\\n' "$(printf '%s:%s' "$NEXUS_USER" "$NEXUS_PASS" | base64 -w0)" > "$CARGO_HOME/credentials.toml"
+            chmod 0600 "$CARGO_HOME/credentials.toml"
+            set +e
+            out=$(cargo publish --locked --registry lockamy-hosted 2>&1); rc=$?
+            set -e
+            printf '%s\\n' "$out" | sed -E 's/(Basic )[A-Za-z0-9+\\/=]+/\\1***/g'
+            rm -f "$CARGO_HOME/credentials.toml"
+            if [ "$rc" -ne 0 ]; then
+              if printf '%s' "$out" | grep -qiE 'already (exists|uploaded)|already been uploaded|version .* is already'; then
+                echo "Version already on Nexus: treating as success (idempotent)."
+              else
+                exit "$rc"
+              fi
+            fi
+          '''
+        }
+      }
+      post {
+        always { sh 'chown -R "$(stat -c "%u:%g" "$WORKSPACE/.git")" "$WORKSPACE" 2>/dev/null || true' }
+      }
+    }
+
+    stage('Tag') {
+      when { expression { params.PUBLISH_NEXUS || params.PUBLISH_CRATES_IO } }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'github-token', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
+          sh '''
+            set -eu
+            git config user.email "ci@softsurve.com"
+            git config user.name "Sol CI"
+            origin=$(git config --get remote.origin.url)
+            path=$(printf '%s' "$origin" | sed -E 's#(git@github.com:|https://github.com/)##; s#[.]git$##')
+            if git rev-parse -q --verify "refs/tags/v${RELEASE_VERSION}" >/dev/null; then
+              echo "Tag v${RELEASE_VERSION} already exists on this commit: nothing to do."
+            else
+              git tag -a "v${RELEASE_VERSION}" -m "Errand Kit ${RELEASE_VERSION}"
+              git push "https://${GIT_USER}:${GIT_TOKEN}@github.com/${path}.git" "v${RELEASE_VERSION}"
+            fi
+          '''
+        }
+      }
+    }
+
+    stage('Publish to crates.io') {
+      when { expression { params.PUBLISH_CRATES_IO } }
+      steps {
+        script {
+          timeout(time: 30, unit: 'MINUTES') {
+            input message: "Publish slashbuilder-errand-kit ${params.VERSION} to crates.io? This is PERMANENT: a published version can be yanked but never removed.", submitter: 'dlockamy'
+          }
+          try {
+            withCredentials([string(credentialsId: 'crates-io-token', variable: 'CARGO_REGISTRY_TOKEN')]) {
+              docker.image('rust:1.94').inside('-u root') {
+                sh 'cargo publish --locked --registry crates-io'
+              }
+            }
+          } catch (hudson.AbortException e) {
+            unstable("crates.io was NOT published: ${e.message}. If the credential 'crates-io-token' is missing, create an API token at crates.io (scopes publish-new and publish-update, crate pattern slashbuilder-*, with an expiry), store it as Jenkins secret text 'crates-io-token', and re-run with PUBLISH_CRATES_IO.")
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      archiveArtifacts artifacts: 'dist/*', allowEmptyArchive: true
+      cleanWs()
+    }
+  }
+}

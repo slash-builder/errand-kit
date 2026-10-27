@@ -1,6 +1,6 @@
 //! The bubblewrap backend for a Linux host: argument construction plus a presence and user-namespace check.
 //!
-//! The masking mirrors the Python dispatcher's `sandbox.py` (security review 2026-10-08): the root is bound read-only and
+//! The masking follows a reviewed design: the root is bound read-only and
 //! `/run`, `/var/log`, `/var/lib/docker`, `/var/lib/lxd`, `/mnt`, `/media`, `/srv`, `/root` and `/home` are each replaced by an
 //! empty tmpfs, so the container runtime socket, the user D-Bus, SSH and keyring agents, other users' homes and the logs
 //! are invisible. Only the DNS resolver directory is bound back. Network stays shared (egress is open and the record says so).
@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 use crate::contract::{BoundaryReport, Check};
 use crate::sandbox::{credential_shaped, Sandbox};
 
-/// Directories replaced by an empty tmpfs, in the order the Python dispatcher masks them.
+/// Directories replaced by an empty tmpfs, in a fixed order.
 pub const DEFAULT_MASKED: &[&str] = &[
     "/run",
     "/var/log",
@@ -345,7 +345,7 @@ mod tests {
         let home = position(&a, "/home");
         assert_eq!(a[run - 1], "--tmpfs");
         assert_eq!(a[home - 1], "--tmpfs");
-        assert!(run < home, "masks keep the dispatcher's order");
+        assert!(run < home, "masks keep their order");
         // The resolver bind comes after the /run mask so it shows through.
         assert!(position(&a, "--ro-bind-try") > run);
         let share = position(&a, "--share-net");
@@ -363,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn default_masks_cover_the_dispatcher_list() {
+    fn default_masks_cover_the_documented_list() {
         let bw = Bubblewrap::new(cfg_no_exist_check());
         let a = strs(&bw.build_args_in("p".as_ref(), &[], None, &[], &no_env));
         for m in [

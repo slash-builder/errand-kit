@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::contract::{BoundaryReport, Check};
-use crate::sandbox::{credential_shaped, Sandbox, CREDENTIAL_PREFIXES};
+use crate::sandbox::{credential_shaped, Sandbox, CREDENTIAL_PREFIXES, CREDENTIAL_SUFFIXES};
 
 /// Directories under which a writable mount is allowed by default.
 pub const DEFAULT_WRITABLE_ALLOWLIST: &[&str] = &["/tmp", "/home/runner", "/out", "/work"];
@@ -431,8 +431,8 @@ fn check_writable_mounts(mounts: &Option<Vec<Mount>>, allowlist: &[String]) -> C
 }
 
 /// Writable allowlisted mounts without `nosuid,nodev`. Reported but NOT required: a host bind mount (for example the
-/// Jenkins workspace behind `/out`) often lacks them, and with every capability dropped (no `mknod`) and `no-new-privileges`
-/// (no setuid escalation), which are required checks of their own, the flags add little. Seen on the Linux agents 2026-10-27.
+/// CI workspace behind `/out`) often lacks them, and with every capability dropped (no `mknod`) and `no-new-privileges`
+/// (no setuid escalation), which are required checks of their own, the flags add little. Seen on Linux CI agents.
 fn check_writable_mount_flags(mounts: &Option<Vec<Mount>>, allowlist: &[String]) -> Check {
     let name = "writable_mounts_nosuid_nodev";
     let Some(mounts) = mounts else {
@@ -565,12 +565,19 @@ fn safe_label(entry: &[u8]) -> Option<String> {
     if plain {
         return Some(lossy.into_owned());
     }
-    let prefix = CREDENTIAL_PREFIXES
+    // The name is not a plain identifier, so it might carry part of a value: report only the rule it matched, never the bytes.
+    let rule = CREDENTIAL_PREFIXES
         .iter()
         .find(|p| lossy.starts_with(**p))
-        .copied()
-        .unwrap_or("?");
-    Some(format!("{prefix}<unprintable name>"))
+        .map(|p| format!("{p}..."))
+        .or_else(|| {
+            CREDENTIAL_SUFFIXES
+                .iter()
+                .find(|s| lossy.ends_with(**s))
+                .map(|s| format!("...{s}"))
+        })
+        .unwrap_or_else(|| "credential-shaped".to_string());
+    Some(format!("{rule} <unprintable name>"))
 }
 
 fn check_proc_environ(proc_root: &Path) -> Check {
@@ -1237,10 +1244,15 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
             "GH_X",
             "CLOUDFLARE_X",
             "TF_X",
-            "GRAFANA_X",
-            "SOL_X",
+            "SLACK_X",
+            "OPENAI_X",
+            "GOOGLE_X",
             "ANTHROPIC_API_KEY",
             "DOCKER_X",
+            "DB_PASSWORD",
+            "STRIPE_SECRET_KEY",
+            "NPM_TOKEN",
+            "SERVICE_API_KEY",
         ] {
             let f = Fake::clean();
             f.write("proc/9/environ", &format!("{name}=v\0"));

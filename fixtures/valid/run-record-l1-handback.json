@@ -104,8 +104,8 @@
     "patch.diff"
   ],
   "handback": {
-    "ticket": "HOME-1",
-    "repo": "dlockamy/homelab-mfe-monorepo",
+    "ticket": "TICKET-1",
+    "repo": "example/app",
     "base": "8a15f68",
     "patch": "patch.diff",
     "files_changed": [

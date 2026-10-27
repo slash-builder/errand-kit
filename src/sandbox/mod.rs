@@ -10,30 +10,71 @@ pub mod container;
 pub mod none;
 
 /// Variable-name prefixes that mark a credential. A worker's environment, and every process visible to the worker, must
-/// contain none of these (`CLAUDE_CODE_OAUTH_TOKEN` is the worker's own token and is deliberately not listed).
+/// contain none of these (`CLAUDE_CODE_OAUTH_TOKEN` is the worker's own token and is deliberately not matched).
 pub const CREDENTIAL_PREFIXES: &[&str] = &[
     "AWS_",
+    "AZURE_",
+    "GCP_",
+    "GOOGLE_",
     "GITHUB_",
     "GH_",
+    "GITLAB_",
     "CLOUDFLARE_",
     "TF_",
-    "GRAFANA_",
-    "SOL_",
+    "SLACK_",
     "ANTHROPIC_API",
+    "OPENAI_",
     "DOCKER_",
 ];
 
-/// True if a variable *name* looks like a credential.
+/// Variable-name suffixes that mark a credential whatever the prefix (`DB_PASSWORD`, `STRIPE_SECRET_KEY`, `NPM_TOKEN`).
+pub const CREDENTIAL_SUFFIXES: &[&str] = &[
+    "_PASSWORD",
+    "_PASSWD",
+    "_SECRET",
+    "_SECRET_KEY",
+    "_ACCESS_KEY",
+    "_API_KEY",
+    "_PRIVATE_KEY",
+    "_TOKEN",
+];
+
+/// The one credential-shaped name a worker is allowed: its own login token.
+pub const WORKER_OWN_TOKEN: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+
+/// Extra prefixes a deployment can add without recompiling, as a comma-separated list in `ERRAND_CREDENTIAL_PREFIXES`
+/// (for example `ACME_,INTERNAL_`).
+fn extra_prefixes() -> Vec<String> {
+    std::env::var("ERRAND_CREDENTIAL_PREFIXES")
+        .map(|v| {
+            v.split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// True if a variable *name* looks like a credential: it starts with a listed prefix, ends with a listed suffix, or starts with
+/// a deployment-added prefix. The worker's own token is the one exception.
 ///
 /// ```
 /// use errand_kit::sandbox::credential_shaped;
 /// assert!(credential_shaped("AWS_SECRET_ACCESS_KEY"));
-/// assert!(credential_shaped("GRAFANA_PASSWORD"));
+/// assert!(credential_shaped("DB_PASSWORD"));
+/// assert!(credential_shaped("NPM_TOKEN"));
 /// assert!(!credential_shaped("CLAUDE_CODE_OAUTH_TOKEN"));
 /// assert!(!credential_shaped("PATH"));
 /// ```
 pub fn credential_shaped(name: &str) -> bool {
+    if name == WORKER_OWN_TOKEN {
+        return false;
+    }
     CREDENTIAL_PREFIXES.iter().any(|p| name.starts_with(p))
+        || CREDENTIAL_SUFFIXES.iter().any(|s| name.ends_with(s))
+        || extra_prefixes()
+            .iter()
+            .any(|p| name.starts_with(p.as_str()))
 }
 
 /// A way of confining a worker.

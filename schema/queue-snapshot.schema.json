@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "QueueSnapshot",
-  "description": "The snapshot the engine publishes and Courier reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.",
+  "description": "The snapshot the engine publishes and a client app reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.",
   "type": "object",
   "required": [
     "engine",
@@ -49,7 +49,7 @@
   },
   "definitions": {
     "QueueEngine": {
-      "description": "The engine part of the queue snapshot Courier reads.",
+      "description": "The engine part of the queue snapshot a client app reads.",
       "type": "object",
       "required": [
         "live",
@@ -129,7 +129,7 @@
       }
     },
     "QueueTicket": {
-      "description": "A ticket as Courier shows it.",
+      "description": "A ticket as a client app shows it.",
       "type": "object",
       "required": [
         "key",

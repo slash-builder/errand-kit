@@ -54,10 +54,10 @@ enum Cmd {
         /// Task name (a directory under --tasks-root).
         task: String,
         /// Directory holding task directories.
-        #[arg(long, default_value = "/opt/runner/tasks")]
+        #[arg(long, default_value = "tasks")]
         tasks_root: PathBuf,
         /// Output directory.
-        #[arg(long, default_value = "/out")]
+        #[arg(long, default_value = "out")]
         out: PathBuf,
         /// Which boundary to verify.
         #[arg(long, value_enum, default_value = "container")]

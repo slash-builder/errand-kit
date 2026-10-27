@@ -1,12 +1,12 @@
 # Errand Kit: the contract
 
-**Status: draft 0.1 (2026-10-26).** An *errand* is a bounded piece of delegated work that runs under limits and comes back
+**Status: alpha (0.1).** The contract may change before 1.0. An *errand* is a bounded piece of delegated work that runs under limits and comes back
 with a hand-back for a human. This document is the contract; `schema/` holds the JSON Schemas generated from the Rust types,
 and `fixtures/` holds the shared conformance cases that every implementation and every consumer must pass (the App Context Kit
 method: the suite is the product, the prose is commentary).
 
-Consumers: the Dispatcher service, the automation container (Jenkins), and Courier (which only reads the queue snapshot and
-writes consent commands; it never runs a worker). Language: Rust; Courier consumes the schemas and fixtures.
+Consumers: a long-running service that works a queue, a container that runs scheduled tasks, and a client app that only reads the
+queue snapshot and writes consent commands (it never runs a worker). Language: Rust; other languages consume the schemas and fixtures.
 
 ## 1. The lifecycle: one errand, six phases
 
@@ -30,7 +30,7 @@ and phase 2 *proves* that instead of assuming it.
 |---|---|---|---|
 | **L0** | report only | `Read`, `Grep`, `Glob` | a digest and a verdict |
 | **L1** | propose a change | L0 plus `Edit`, `Write` | a **patch** and a hand-back; nothing is pushed |
-| **L2** | open a PR | as L1 | the *trusted* phase applies the validated patch to a fresh clone it made itself, pushes a branch and opens a PR |
+| **L2** | open a PR | as L1 | the *trusted* phase applies the validated patch to a fresh clone it made itself, pushes a branch and opens a PR. **Specified, not implemented in this release:** the Kit provides the patch builder and validator; the push and PR step belongs to the host and is not in the CLI |
 | **L3** | never automatic | none | parked for a human; the engine never executes it |
 
 No worker gets `Bash`, `WebFetch`, `WebSearch` or any MCP tool until there is an egress broker (open egress plus a shell is an
@@ -41,9 +41,12 @@ Kit's own repository are **never** automated at any level.
 
 A task's prepare step may write `out/status.txt` containing exactly `STATUS: OK` or `STATUS: ATTENTION`. When it exists it
 **is** the verdict. The model's digest must end (last non-empty line, nowhere else) with the same line; a mismatch fails the run
-(exit 73) and the code's value is the one recorded. When the task cannot compute a verdict, the digest's last line is used and
-must be exactly `STATUS: OK` or `STATUS: ATTENTION`. Exit codes: `0` OK, `3` ATTENTION, `64` usage, `70` no digest, `71` no valid
-STATUS line, `72` boundary refused, `73` verdict mismatch or a hard gate failed, `80`+ environment.
+(exit 73) and the verdict is `FAILED`. When the task cannot compute a verdict, the digest's last line is used and must be exactly
+`STATUS: OK` or `STATUS: ATTENTION`; anything else is `FAILED`.
+
+**Exit codes of the CLI:** `0` OK; `3` ATTENTION; `64` any other error (usage, I/O, task, recipe, tracker); `70` the worker produced
+no digest; `72` the boundary refused the run; `73` a hard gate failed, the verdict disagreed with the code's, or the digest had no
+valid STATUS line.
 
 ## 4. The boundary (phase 2)
 
@@ -100,12 +103,12 @@ Pure function of a snapshot of usage windows: `allow` unless a window's `used_fr
 0.70 for five hours, 0.80 for seven days). **A stale (older than the configured age), missing or unreadable snapshot means
 deny.**
 
-## 9. Courier contract: the queue snapshot
+## 9. Client contract: the queue snapshot
 
-`QueueSnapshot` formalises the engine's existing `queue.json` (see the Dispatcher's `docs/COURIER-CONTRACT.md`) so Courier's
-parser and the engine are tested against the same fixtures. Unknown fields are ignored; absent optional fields are `null`.
+`QueueSnapshot` is the file (`queue.json`) a running engine publishes for a client app to show. Its JSON Schema and fixtures let an
+engine and a client in different languages be tested against the same files. Unknown fields are ignored; absent optional fields are `null`.
 
 ## 10. Non-goals
 
-UI, pairing, Jenkins job definitions, model hosting, memory, and any decision about *which* work to do (that is the tracker and
+UI, pairing, CI job definitions, model hosting, memory, and any decision about *which* work to do (that is the tracker and
 the human).
