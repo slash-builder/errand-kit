@@ -118,6 +118,7 @@ impl ContainerBoundary {
             check_root_readonly(&mounts),
             check_root_write_fails(&r.fs_root),
             check_writable_mounts(&mounts, &r.writable_allowlist),
+            check_writable_mount_flags(&mounts, &r.writable_allowlist),
             check_container_sockets(&r.fs_root, &r.env),
             check_proc_environ(&r.proc_root),
             check_cgroup(&r.fs_root, "cgroup_memory_limited", "memory.max"),
@@ -413,13 +414,6 @@ fn check_writable_mounts(mounts: &Option<Vec<Mount>>, allowlist: &[String]) -> C
         }
         if allowlist.iter().any(|a| under(&m.point, a)) {
             allowed += 1;
-            let missing: Vec<&str> = ["nosuid", "nodev"]
-                .into_iter()
-                .filter(|o| !m.options.contains(*o))
-                .collect();
-            if !missing.is_empty() {
-                problems.push(format!("{} lacks {}", m.point, missing.join(",")));
-            }
         } else {
             problems.push(format!("{} is writable and not allowlisted", m.point));
         }
@@ -429,10 +423,43 @@ fn check_writable_mounts(mounts: &Option<Vec<Mount>>, allowlist: &[String]) -> C
             name,
             true,
             true,
-            format!("{allowed} writable mount(s), all allowlisted and nosuid,nodev"),
+            format!("{allowed} writable mount(s), all allowlisted"),
         )
     } else {
         check(name, true, false, problems.join("; "))
+    }
+}
+
+/// Writable allowlisted mounts without `nosuid,nodev`. Reported but NOT required: a host bind mount (for example the
+/// Jenkins workspace behind `/out`) often lacks them, and with every capability dropped (no `mknod`) and `no-new-privileges`
+/// (no setuid escalation), which are required checks of their own, the flags add little. Seen on the Linux agents 2026-10-27.
+fn check_writable_mount_flags(mounts: &Option<Vec<Mount>>, allowlist: &[String]) -> Check {
+    let name = "writable_mounts_nosuid_nodev";
+    let Some(mounts) = mounts else {
+        return check(name, false, false, "mount table unreadable");
+    };
+    let mut lacking = Vec::new();
+    for m in mounts.iter().filter(|m| m.options.contains("rw")) {
+        if is_pseudo(m) || !allowlist.iter().any(|a| under(&m.point, a)) {
+            continue;
+        }
+        let missing: Vec<&str> = ["nosuid", "nodev"]
+            .into_iter()
+            .filter(|o| !m.options.contains(*o))
+            .collect();
+        if !missing.is_empty() {
+            lacking.push(format!("{} lacks {}", m.point, missing.join(",")));
+        }
+    }
+    if lacking.is_empty() {
+        check(
+            name,
+            false,
+            true,
+            "all writable allowlisted mounts are nosuid,nodev",
+        )
+    } else {
+        check(name, false, false, lacking.join("; "))
     }
 }
 
@@ -834,6 +861,7 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
                 "root_readonly",
                 "root_write_fails",
                 "writable_mounts_allowlisted",
+                "writable_mounts_nosuid_nodev",
                 "no_container_sockets",
                 "proc_environ_clean",
                 "cgroup_memory_limited",
@@ -842,6 +870,7 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
             ]
         );
         let optional = [
+            "writable_mounts_nosuid_nodev",
             "cgroup_memory_limited",
             "cgroup_pids_limited",
             "net_interfaces_minimal",
@@ -1050,7 +1079,7 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
     }
 
     #[test]
-    fn allowlisted_mount_must_be_nosuid_nodev() {
+    fn a_missing_nosuid_nodev_is_reported_but_does_not_refuse_the_run() {
         for (opts, missing) in [
             ("rw,relatime", "nosuid,nodev"),
             ("rw,nosuid,relatime", "nodev"),
@@ -1060,8 +1089,11 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
             let extra = format!("40 24 8:1 /w /work {opts} - ext4 /dev/sda1 rw\n");
             f.write("mountinfo", &format!("{MOUNTINFO_CLEAN}{extra}"));
             let r = f.report();
-            let c = get(&r, "writable_mounts_allowlisted");
-            assert!(!c.ok, "{opts}");
+            // The allowlist check still passes, the run is not refused, and the flags check says what is missing.
+            assert!(get(&r, "writable_mounts_allowlisted").ok, "{opts}");
+            assert!(r.ok, "{opts}: {r:#?}");
+            let c = get(&r, "writable_mounts_nosuid_nodev");
+            assert!(!c.ok && !c.required, "{opts}");
             assert!(c.detail.contains(missing), "{}", c.detail);
         }
     }
