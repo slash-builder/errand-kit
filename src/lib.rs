@@ -23,6 +23,7 @@ pub mod gates;
 pub mod governor;
 pub mod outbox;
 pub mod sandbox;
+pub mod schema;
 pub mod task;
 pub mod time;
 pub mod tracker;

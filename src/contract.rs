@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// How much a worker may do. See `spec/ERRAND.md` section 2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub enum Risk {
     /// Report only: `Read`, `Grep`, `Glob`.

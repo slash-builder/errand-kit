@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "run_id": "0123456789abcdef",
+  "task": "fix-jenkinsfile",
+  "risk": "L1",
+  "started_at": "2026-10-27T01:00:00Z",
+  "finished_at": "2026-10-27T01:00:30Z",
+  "phases": [
+    {
+      "phase": "boundary",
+      "ok": true,
+      "started_at": "2026-10-27T01:00:00Z",
+      "finished_at": "2026-10-27T01:00:05Z",
+      "note": null
+    },
+    {
+      "phase": "worker",
+      "ok": true,
+      "started_at": "2026-10-27T01:00:00Z",
+      "finished_at": "2026-10-27T01:00:05Z",
+      "note": null
+    },
+    {
+      "phase": "gates",
+      "ok": true,
+      "started_at": "2026-10-27T01:00:00Z",
+      "finished_at": "2026-10-27T01:00:05Z",
+      "note": null
+    },
+    {
+      "phase": "record",
+      "ok": true,
+      "started_at": "2026-10-27T01:00:00Z",
+      "finished_at": "2026-10-27T01:00:05Z",
+      "note": null
+    }
+  ],
+  "boundary": {
+    "kind": "container",
+    "ok": true,
+    "egress": "open",
+    "checks": [
+      {
+        "name": "caps_zero",
+        "ok": true,
+        "required": true,
+        "detail": "all capability sets are zero"
+      },
+      {
+        "name": "proc_environ_clean",
+        "ok": true,
+        "required": true,
+        "detail": "no credential-shaped names in any process environment"
+      }
+    ]
+  },
+  "worker": {
+    "kind": "claude-cli",
+    "tools_requested": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write"
+    ],
+    "tools_reported": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write"
+    ],
+    "max_turns": 6,
+    "exit_code": 0,
+    "duration_ms": 24000
+  },
+  "gates": [
+    {
+      "name": "boundary",
+      "kind": "boundary",
+      "ok": true,
+      "hard": true,
+      "detail": "container boundary verified"
+    },
+    {
+      "name": "status_line",
+      "kind": "status_line",
+      "ok": true,
+      "hard": true,
+      "detail": "valid STATUS line"
+    },
+    {
+      "name": "diff_scope",
+      "kind": "diff_scope",
+      "ok": true,
+      "hard": true,
+      "detail": "1 file(s), +3 -1"
+    }
+  ],
+  "verdict": "OK",
+  "verdict_source": "model",
+  "digest": "digest.md",
+  "artifacts": [
+    "patch.diff"
+  ],
+  "handback": {
+    "ticket": "HOME-1",
+    "repo": "dlockamy/homelab-mfe-monorepo",
+    "base": "8a15f68",
+    "patch": "patch.diff",
+    "files_changed": [
+      "ci/build.sh"
+    ],
+    "summary": "Install node before the build step.",
+    "verified": [
+      "patch passed the scope and protected-path checks"
+    ],
+    "unverified": [
+      "the patch has not been applied or built"
+    ],
+    "next_human_step": "review the patch; nothing is pushed or merged automatically"
+  },
+  "exit_code": 0
+}

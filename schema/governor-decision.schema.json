@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GovernorDecision",
+  "description": "The governor's decision.",
+  "type": "object",
+  "required": [
+    "allow",
+    "reason"
+  ],
+  "properties": {
+    "allow": {
+      "description": "Whether new work may start.",
+      "type": "boolean"
+    },
+    "reason": {
+      "description": "Why (always filled; a deny names the window or the staleness).",
+      "type": "string"
+    }
+  }
+}

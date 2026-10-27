@@ -1,0 +1,76 @@
+{
+  "engine": {
+    "live": true,
+    "paused": false,
+    "outbox_pending": 2,
+    "mode": "live"
+  },
+  "limits": {
+    "five_hour": 0.31,
+    "seven_day": 0.52,
+    "status": "ok",
+    "resets_at": 1793100000,
+    "report_age_s": 42,
+    "ceilings": {
+      "five_hour": 0.7,
+      "seven_day": 0.8
+    }
+  },
+  "repos": [
+    {
+      "name": "quickring/courier",
+      "label": "Courier",
+      "can_implement": true,
+      "enabled": true
+    }
+  ],
+  "tickets": [
+    {
+      "key": "QR-1",
+      "summary": "Fix the thing",
+      "status": "Ready",
+      "project": "QR",
+      "type": "Task",
+      "labels": [
+        "agent-ready",
+        "repo:quickring/courier"
+      ],
+      "repo": "quickring/courier",
+      "restricted": false,
+      "stage": "awaiting-merge-approval",
+      "stage_text": "Waiting for you",
+      "actions": [
+        "approve-merge",
+        "hold"
+      ],
+      "needs_repo": false,
+      "suggested_repo": null,
+      "pr": {
+        "url": "https://github.com/quickring/courier/pull/1",
+        "number": 1,
+        "state": "open",
+        "review_blocked": false,
+        "sha": "abc1234"
+      }
+    }
+  ],
+  "runs": [
+    {
+      "id": "r1",
+      "key": "QR-1",
+      "lane": "cloud",
+      "executor": "claude",
+      "state": "done"
+    }
+  ],
+  "board_error": null,
+  "published_at": 1793058132,
+  "chat": {
+    "enabled": true,
+    "credential": "present",
+    "workspace": "clean",
+    "findings": 0,
+    "live_sessions": 0,
+    "ready": true
+  }
+}

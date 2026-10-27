@@ -1,0 +1,266 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "QueueSnapshot",
+  "description": "The snapshot the engine publishes and Courier reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.",
+  "type": "object",
+  "required": [
+    "engine",
+    "limits",
+    "published_at",
+    "tickets"
+  ],
+  "properties": {
+    "engine": {
+      "description": "Engine state.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/QueueEngine"
+        }
+      ]
+    },
+    "limits": {
+      "description": "Usage limits.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/QueueLimits"
+        }
+      ]
+    },
+    "tickets": {
+      "description": "Tickets.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/QueueTicket"
+      }
+    },
+    "board_error": {
+      "description": "An error from reading the board, if any.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "published_at": {
+      "description": "When the snapshot was published, epoch seconds.",
+      "type": "integer",
+      "format": "int64"
+    }
+  },
+  "definitions": {
+    "QueueEngine": {
+      "description": "The engine part of the queue snapshot Courier reads.",
+      "type": "object",
+      "required": [
+        "live",
+        "mode",
+        "outbox_pending",
+        "paused"
+      ],
+      "properties": {
+        "live": {
+          "description": "The engine process is alive.",
+          "type": "boolean"
+        },
+        "paused": {
+          "description": "The engine is paused.",
+          "type": "boolean"
+        },
+        "outbox_pending": {
+          "description": "Outbox entries not yet delivered.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "mode": {
+          "description": "`live` or a test mode name.",
+          "type": "string"
+        }
+      }
+    },
+    "QueueLimits": {
+      "description": "The usage limits part of the queue snapshot.",
+      "type": "object",
+      "properties": {
+        "five_hour": {
+          "description": "Five-hour window fraction used, or `null`.",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "seven_day": {
+          "description": "Seven-day window fraction used, or `null`.",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "status": {
+          "description": "`ok`, `paused`, `unknown`, ...",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resets_at": {
+          "description": "Reset time, epoch seconds.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "report_age_s": {
+          "description": "Age of the usage report, seconds.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      }
+    },
+    "QueueTicket": {
+      "description": "A ticket as Courier shows it.",
+      "type": "object",
+      "required": [
+        "key",
+        "stage",
+        "summary"
+      ],
+      "properties": {
+        "key": {
+          "description": "The ticket key, e.g. `QR-12`.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "Title (replaced for restricted tickets).",
+          "type": "string"
+        },
+        "status": {
+          "description": "Tracker status.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project": {
+          "description": "Project key.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "description": "Issue type.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "description": "Labels.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "repo": {
+          "description": "Repository `owner/name`, if known.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "restricted": {
+          "description": "Restricted tickets show only their key.",
+          "default": false,
+          "type": "boolean"
+        },
+        "stage": {
+          "description": "One of the lifecycle stages (`not-approved`, `queued`, `working`, `refinement-ready`, `needs-you`, `awaiting-merge-approval`, `merge-approved`, `review-blocked`, `done`).",
+          "type": "string"
+        },
+        "stage_text": {
+          "description": "Human text for the stage.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "actions": {
+          "description": "Actions the viewer may take now.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pr": {
+          "description": "The attached PR.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/QueuePr"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "QueuePr": {
+      "description": "A pull request attached to a ticket.",
+      "type": "object",
+      "required": [
+        "number",
+        "state",
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "description": "The PR URL.",
+          "type": "string"
+        },
+        "number": {
+          "description": "The PR number.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "state": {
+          "description": "`open`, `merged`, `closed`.",
+          "type": "string"
+        },
+        "review_blocked": {
+          "description": "True if review blocked it.",
+          "default": false,
+          "type": "boolean"
+        },
+        "sha": {
+          "description": "Head commit.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BoundaryReport",
+  "description": "What the sandbox verified before the worker started.",
+  "type": "object",
+  "required": [
+    "checks",
+    "egress",
+    "kind",
+    "ok"
+  ],
+  "properties": {
+    "kind": {
+      "description": "`container`, `bubblewrap` or `none` (the last only in test builds).",
+      "type": "string"
+    },
+    "ok": {
+      "description": "True only if every required check passed.",
+      "type": "boolean"
+    },
+    "egress": {
+      "description": "Egress as the Kit can know it: always `open` today; it cannot be verified closed.",
+      "type": "string"
+    },
+    "checks": {
+      "description": "The individual checks.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Check"
+      }
+    }
+  },
+  "definitions": {
+    "Check": {
+      "description": "One boundary check and its result.",
+      "type": "object",
+      "required": [
+        "detail",
+        "name",
+        "ok",
+        "required"
+      ],
+      "properties": {
+        "name": {
+          "description": "Stable machine name, e.g. `caps_zero`.",
+          "type": "string"
+        },
+        "ok": {
+          "description": "Whether the check passed.",
+          "type": "boolean"
+        },
+        "required": {
+          "description": "Whether a failure refuses the run (`true`) or is only reported.",
+          "type": "boolean"
+        },
+        "detail": {
+          "description": "What was observed. Names only for anything credential-shaped; never a value.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

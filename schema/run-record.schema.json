@@ -1,0 +1,502 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RunRecord",
+  "description": "The record of one errand, written as `run.json`.",
+  "type": "object",
+  "required": [
+    "exit_code",
+    "gates",
+    "phases",
+    "risk",
+    "run_id",
+    "schema_version",
+    "started_at",
+    "task",
+    "verdict",
+    "verdict_source"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Contract version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "run_id": {
+      "description": "A unique id for this run.",
+      "type": "string"
+    },
+    "task": {
+      "description": "The task name.",
+      "type": "string"
+    },
+    "risk": {
+      "description": "The risk level it ran at.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Risk"
+        }
+      ]
+    },
+    "started_at": {
+      "description": "Start time, RFC 3339 UTC.",
+      "type": "string"
+    },
+    "finished_at": {
+      "description": "End time, RFC 3339 UTC.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phases": {
+      "description": "The phases that ran.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PhaseRecord"
+      }
+    },
+    "boundary": {
+      "description": "The boundary report, if phase 2 ran.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BoundaryReport"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "worker": {
+      "description": "The worker report, if phase 3 ran.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/WorkerReport"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "gates": {
+      "description": "Gate results.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/GateResult"
+      }
+    },
+    "verdict": {
+      "description": "The verdict.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Verdict"
+        }
+      ]
+    },
+    "verdict_source": {
+      "description": "Where the verdict came from: `code` (a status file written by the task) or `model` (the digest's last line).",
+      "type": "string"
+    },
+    "digest": {
+      "description": "The digest file, relative to the output directory.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "artifacts": {
+      "description": "Other output files, relative to the output directory.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "handback": {
+      "description": "The hand-back, for L1+.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/HandBack"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "exit_code": {
+      "description": "The process exit code the run ends with.",
+      "type": "integer",
+      "format": "int32"
+    }
+  },
+  "definitions": {
+    "Risk": {
+      "description": "How much a worker may do. See `spec/ERRAND.md` section 2.",
+      "oneOf": [
+        {
+          "description": "Report only: `Read`, `Grep`, `Glob`.",
+          "type": "string",
+          "enum": [
+            "L0"
+          ]
+        },
+        {
+          "description": "Propose a change as a patch; nothing is pushed.",
+          "type": "string",
+          "enum": [
+            "L1"
+          ]
+        },
+        {
+          "description": "The trusted phase may open a pull request from a validated patch.",
+          "type": "string",
+          "enum": [
+            "L2"
+          ]
+        },
+        {
+          "description": "Never automatic.",
+          "type": "string",
+          "enum": [
+            "L3"
+          ]
+        }
+      ]
+    },
+    "PhaseRecord": {
+      "description": "How a phase ended.",
+      "type": "object",
+      "required": [
+        "finished_at",
+        "ok",
+        "phase",
+        "started_at"
+      ],
+      "properties": {
+        "phase": {
+          "description": "Which phase.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Phase"
+            }
+          ]
+        },
+        "ok": {
+          "description": "Whether it completed without error.",
+          "type": "boolean"
+        },
+        "started_at": {
+          "description": "Start time, RFC 3339 UTC.",
+          "type": "string"
+        },
+        "finished_at": {
+          "description": "End time, RFC 3339 UTC.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A short human note; never a secret.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "Phase": {
+      "description": "One of the six phases of an errand.",
+      "oneOf": [
+        {
+          "description": "Credentialed data gathering.",
+          "type": "string",
+          "enum": [
+            "prepare"
+          ]
+        },
+        {
+          "description": "Boundary verification.",
+          "type": "string",
+          "enum": [
+            "boundary"
+          ]
+        },
+        {
+          "description": "The untrusted worker.",
+          "type": "string",
+          "enum": [
+            "worker"
+          ]
+        },
+        {
+          "description": "Engine-owned gates.",
+          "type": "string",
+          "enum": [
+            "gates"
+          ]
+        },
+        {
+          "description": "Writing the run record.",
+          "type": "string",
+          "enum": [
+            "record"
+          ]
+        }
+      ]
+    },
+    "BoundaryReport": {
+      "description": "What the sandbox verified before the worker started.",
+      "type": "object",
+      "required": [
+        "checks",
+        "egress",
+        "kind",
+        "ok"
+      ],
+      "properties": {
+        "kind": {
+          "description": "`container`, `bubblewrap` or `none` (the last only in test builds).",
+          "type": "string"
+        },
+        "ok": {
+          "description": "True only if every required check passed.",
+          "type": "boolean"
+        },
+        "egress": {
+          "description": "Egress as the Kit can know it: always `open` today; it cannot be verified closed.",
+          "type": "string"
+        },
+        "checks": {
+          "description": "The individual checks.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Check"
+          }
+        }
+      }
+    },
+    "Check": {
+      "description": "One boundary check and its result.",
+      "type": "object",
+      "required": [
+        "detail",
+        "name",
+        "ok",
+        "required"
+      ],
+      "properties": {
+        "name": {
+          "description": "Stable machine name, e.g. `caps_zero`.",
+          "type": "string"
+        },
+        "ok": {
+          "description": "Whether the check passed.",
+          "type": "boolean"
+        },
+        "required": {
+          "description": "Whether a failure refuses the run (`true`) or is only reported.",
+          "type": "boolean"
+        },
+        "detail": {
+          "description": "What was observed. Names only for anything credential-shaped; never a value.",
+          "type": "string"
+        }
+      }
+    },
+    "WorkerReport": {
+      "description": "What the worker was and what it did.",
+      "type": "object",
+      "required": [
+        "kind",
+        "max_turns",
+        "tools_requested"
+      ],
+      "properties": {
+        "kind": {
+          "description": "`claude-cli`, `fake`, ...",
+          "type": "string"
+        },
+        "tools_requested": {
+          "description": "The tools requested (the hard allowlist).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools_reported": {
+          "description": "The tools the worker reported having, when it can report them.",
+          "default": null,
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_turns": {
+          "description": "Maximum conversation turns.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "exit_code": {
+          "description": "Process exit code, if it ran.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "duration_ms": {
+          "description": "Wall time in milliseconds, if it ran.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "GateResult": {
+      "description": "The result of one gate.",
+      "type": "object",
+      "required": [
+        "detail",
+        "hard",
+        "kind",
+        "name",
+        "ok"
+      ],
+      "properties": {
+        "name": {
+          "description": "Stable name, e.g. `status_line`.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Kind of gate: `boundary`, `tools_match`, `status_line`, `env_clean`, `diff_scope`, `command`.",
+          "type": "string"
+        },
+        "ok": {
+          "description": "Whether it passed.",
+          "type": "boolean"
+        },
+        "hard": {
+          "description": "Whether a failure makes the verdict `FAILED`.",
+          "type": "boolean"
+        },
+        "detail": {
+          "description": "What was observed.",
+          "type": "string"
+        }
+      }
+    },
+    "Verdict": {
+      "description": "The outcome of an errand.",
+      "oneOf": [
+        {
+          "description": "Nothing needs a human.",
+          "type": "string",
+          "enum": [
+            "OK"
+          ]
+        },
+        {
+          "description": "Something needs a human.",
+          "type": "string",
+          "enum": [
+            "ATTENTION"
+          ]
+        },
+        {
+          "description": "The errand machinery itself failed (boundary refused, hard gate failed, worker produced nothing).",
+          "type": "string",
+          "enum": [
+            "FAILED"
+          ]
+        }
+      ]
+    },
+    "HandBack": {
+      "description": "What an L1+ worker hands back for a human (or the trusted phase) to review.",
+      "type": "object",
+      "required": [
+        "files_changed",
+        "next_human_step",
+        "summary",
+        "unverified",
+        "verified"
+      ],
+      "properties": {
+        "ticket": {
+          "description": "The ticket key this concerns, if any.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "description": "The repository the patch applies to (`owner/name`).",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base": {
+          "description": "The base commit the patch was made against.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patch": {
+          "description": "Relative path of the patch file inside the run's output directory.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "files_changed": {
+          "description": "Files the patch touches, as parsed from the patch text by the Kit (not as claimed by the worker).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "description": "What the worker says it did. Untrusted prose.",
+          "type": "string"
+        },
+        "verified": {
+          "description": "What the Kit itself verified.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unverified": {
+          "description": "What could not be verified.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "next_human_step": {
+          "description": "The one thing a human should do next.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

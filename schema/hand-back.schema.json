@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HandBack",
+  "description": "What an L1+ worker hands back for a human (or the trusted phase) to review.",
+  "type": "object",
+  "required": [
+    "files_changed",
+    "next_human_step",
+    "summary",
+    "unverified",
+    "verified"
+  ],
+  "properties": {
+    "ticket": {
+      "description": "The ticket key this concerns, if any.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repo": {
+      "description": "The repository the patch applies to (`owner/name`).",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "base": {
+      "description": "The base commit the patch was made against.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "patch": {
+      "description": "Relative path of the patch file inside the run's output directory.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "files_changed": {
+      "description": "Files the patch touches, as parsed from the patch text by the Kit (not as claimed by the worker).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "description": "What the worker says it did. Untrusted prose.",
+      "type": "string"
+    },
+    "verified": {
+      "description": "What the Kit itself verified.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unverified": {
+      "description": "What could not be verified.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_human_step": {
+      "description": "The one thing a human should do next.",
+      "type": "string"
+    }
+  }
+}

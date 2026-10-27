@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OutboxEntry",
+  "description": "A message waiting to be delivered to a tracker or chat, exactly once.",
+  "type": "object",
+  "required": [
+    "body",
+    "created_at",
+    "id",
+    "kind",
+    "run_id",
+    "target"
+  ],
+  "properties": {
+    "id": {
+      "description": "`sha256(run_id, op, target)` in hex; also the idempotency marker `[errand:<id>]`.",
+      "type": "string"
+    },
+    "target": {
+      "description": "Where it goes (a ticket key, a channel id).",
+      "type": "string"
+    },
+    "kind": {
+      "description": "What kind of post: `comment`, `label`, ...",
+      "type": "string"
+    },
+    "body": {
+      "description": "The text to post, before the marker is appended.",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "The run that produced it.",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "Creation time, RFC 3339 UTC.",
+      "type": "string"
+    },
+    "delivered_at": {
+      "description": "Delivery time, set only after the tracker confirmed it.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attempts": {
+      "description": "How many delivery attempts were made.",
+      "default": 0,
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "last_error": {
+      "description": "The last delivery error, if any.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

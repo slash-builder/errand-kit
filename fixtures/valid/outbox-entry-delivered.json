@@ -1,0 +1,11 @@
+{
+  "id": "3b1f0c5a9d2e4f67",
+  "target": "SOF-1",
+  "kind": "comment",
+  "body": "x",
+  "run_id": "0123456789abcdef",
+  "created_at": "2026-10-27T01:01:00Z",
+  "delivered_at": "2026-10-27T01:01:02Z",
+  "attempts": 2,
+  "last_error": "timeout on attempt 1"
+}

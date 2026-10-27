@@ -1,0 +1,16 @@
+{
+  "engine": {
+    "live": true,
+    "paused": false,
+    "outbox_pending": 0,
+    "mode": "live"
+  },
+  "limits": {},
+  "tickets": [
+    {
+      "key": "QR-1",
+      "summary": "x"
+    }
+  ],
+  "published_at": 1
+}

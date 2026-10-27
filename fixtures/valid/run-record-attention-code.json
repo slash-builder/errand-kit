@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "run_id": "0123456789abcdef",
+  "task": "expiry-watch",
+  "risk": "L0",
+  "started_at": "2026-10-27T01:00:00Z",
+  "finished_at": "2026-10-27T01:00:30Z",
+  "phases": [
+    {
+      "phase": "boundary",
+      "ok": true,
+      "started_at": "2026-10-27T01:00:00Z",
+      "finished_at": "2026-10-27T01:00:05Z",
+      "note": null
+    },
+    {
+      "phase": "worker",
+      "ok": true,
+      "started_at": "2026-10-27T01:00:00Z",
+      "finished_at": "2026-10-27T01:00:05Z",
+      "note": null
+    },
+    {
+      "phase": "gates",
+      "ok": true,
+      "started_at": "2026-10-27T01:00:00Z",
+      "finished_at": "2026-10-27T01:00:05Z",
+      "note": null
+    },
+    {
+      "phase": "record",
+      "ok": true,
+      "started_at": "2026-10-27T01:00:00Z",
+      "finished_at": "2026-10-27T01:00:05Z",
+      "note": null
+    }
+  ],
+  "boundary": {
+    "kind": "container",
+    "ok": true,
+    "egress": "open",
+    "checks": [
+      {
+        "name": "caps_zero",
+        "ok": true,
+        "required": true,
+        "detail": "all capability sets are zero"
+      },
+      {
+        "name": "proc_environ_clean",
+        "ok": true,
+        "required": true,
+        "detail": "no credential-shaped names in any process environment"
+      }
+    ]
+  },
+  "worker": {
+    "kind": "claude-cli",
+    "tools_requested": [
+      "Read",
+      "Grep",
+      "Glob"
+    ],
+    "tools_reported": [
+      "Read",
+      "Grep",
+      "Glob"
+    ],
+    "max_turns": 6,
+    "exit_code": 0,
+    "duration_ms": 24000
+  },
+  "gates": [
+    {
+      "name": "boundary",
+      "kind": "boundary",
+      "ok": true,
+      "hard": true,
+      "detail": "container boundary verified"
+    },
+    {
+      "name": "status_line",
+      "kind": "status_line",
+      "ok": true,
+      "hard": true,
+      "detail": "valid STATUS line"
+    }
+  ],
+  "verdict": "ATTENTION",
+  "verdict_source": "code",
+  "digest": "digest.md",
+  "artifacts": [
+    "expiry.tsv",
+    "status.txt"
+  ],
+  "handback": null,
+  "exit_code": 3
+}
