@@ -52,6 +52,24 @@
         "review_blocked": false,
         "sha": "abc1234"
       }
+    },
+    {
+      "key": "QR-5",
+      "summary": "(QR-5: restricted title)",
+      "status": "Ready",
+      "project": "QR",
+      "type": "Task",
+      "labels": [],
+      "repo": null,
+      "restricted": true,
+      "stage": "not-approved",
+      "stage_text": "Not approved",
+      "actions": [
+        "refine"
+      ],
+      "needs_repo": false,
+      "suggested_repo": null,
+      "pr": null
     }
   ],
   "runs": [
@@ -64,7 +82,7 @@
     }
   ],
   "board_error": null,
-  "published_at": 1793058132,
+  "published_at": 1793058132.528001,
   "chat": {
     "enabled": true,
     "credential": "present",

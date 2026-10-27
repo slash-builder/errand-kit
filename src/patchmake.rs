@@ -93,8 +93,14 @@ fn clear_except_git(dir: &Path) -> Result<()> {
 }
 
 /// A `git` invocation with every configuration source switched off, run in `repo`.
+/// Largest output read from one `git` call. A diff over this is refused (the validator's own cap is the same size), so a huge or
+/// hostile worker tree cannot make the Kit buffer without limit.
+const MAX_GIT_OUTPUT: u64 = crate::gates::patch::MAX_PATCH_BYTES as u64 + 1;
+
 fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = Command::new("git")
         .current_dir(repo)
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -121,16 +127,41 @@ fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
             "user.email=errand@localhost",
         ])
         .args(args)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| ErrandError::Patch(format!("could not run git: {e}")))?;
-    if !out.status.success() {
+    let mut out = Vec::new();
+    if let Some(so) = child.stdout.take() {
+        so.take(MAX_GIT_OUTPUT)
+            .read_to_end(&mut out)
+            .map_err(|e| ErrandError::Patch(format!("could not read git output: {e}")))?;
+    }
+    if out.len() as u64 >= MAX_GIT_OUTPUT {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(ErrandError::Patch(format!(
+            "git {} produced more than {} bytes of output; the change is too large",
+            args.first().copied().unwrap_or(""),
+            MAX_GIT_OUTPUT - 1
+        )));
+    }
+    let mut err = Vec::new();
+    if let Some(se) = child.stderr.take() {
+        let _ = se.take(64 * 1024).read_to_end(&mut err);
+    }
+    let status = child
+        .wait()
+        .map_err(|e| ErrandError::Patch(format!("could not wait for git: {e}")))?;
+    if !status.success() {
         return Err(ErrandError::Patch(format!(
             "git {} failed: {}",
             args.first().copied().unwrap_or(""),
-            String::from_utf8_lossy(&out.stderr).trim()
+            String::from_utf8_lossy(&err).trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// Build a git-format patch of the differences between `dirs.base` and `dirs.tree`, using `scratch` (an empty or absent
@@ -139,6 +170,11 @@ fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
 /// The patch uses `--no-renames` (a rename is a delete plus an add), `--binary` and `--full-index`, and no external diff
 /// driver or text conversion.
 pub fn make_patch(dirs: &WorkDirs, scratch: &Path) -> Result<String> {
+    // The scratch directory must be FRESH. If a `.git` from an earlier (or planted) run is already there, `git init` would keep its
+    // configuration, and a filter or hook configured in it would run during `git add`.
+    if scratch.exists() {
+        std::fs::remove_dir_all(scratch).map_err(|e| io(scratch, e))?;
+    }
     let repo = scratch.join("repo");
     std::fs::create_dir_all(&repo).map_err(|e| io(&repo, e))?;
     git(&repo, scratch, &["init", "-q"])?;
@@ -193,6 +229,36 @@ mod tests {
         write(&w, "docs/a.md", "one\ntwo\n");
         write(&w, "keep.txt", "same\n");
         WorkDirs { base: b, tree: w }
+    }
+
+    #[test]
+    fn a_planted_scratch_repository_is_wiped_and_cannot_run_anything() {
+        if !have_git() {
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let d = dirs(t.path());
+        let scratch = t.path().join("scratch");
+        let marker = t.path().join("PWNED");
+        // Plant a .git with a clean filter that would touch the marker if it ever ran.
+        write(
+            &scratch,
+            "repo/.git/config",
+            &format!(
+                "[filter \"x\"]\n\tclean = touch {}\n[core]\n\tfsmonitor = touch {}\n",
+                marker.display(),
+                marker.display()
+            ),
+        );
+        write(&scratch, "repo/.git/HEAD", "ref: refs/heads/main\n");
+        write(&d.tree, ".gitattributes", "* filter=x\n");
+        write(&d.tree, "docs/a.md", "changed\n");
+        let p = make_patch(&d, &scratch).unwrap();
+        assert!(p.contains("changed"));
+        assert!(
+            !marker.exists(),
+            "a planted scratch repository must never influence the diff"
+        );
     }
 
     #[test]

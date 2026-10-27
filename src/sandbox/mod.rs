@@ -22,6 +22,11 @@ pub const CREDENTIAL_PREFIXES: &[&str] = &[
     "CLOUDFLARE_",
     "TF_",
     "SLACK_",
+    "JIRA_",
+    "ATLASSIAN_",
+    "VAULT_",
+    "NPM_",
+    "ARM_",
     "ANTHROPIC_API",
     "OPENAI_",
     "DOCKER_",
@@ -38,6 +43,9 @@ pub const CREDENTIAL_SUFFIXES: &[&str] = &[
     "_PRIVATE_KEY",
     "_TOKEN",
 ];
+
+/// Exact variable names that are credentials without a telltale prefix or suffix.
+pub const CREDENTIAL_EXACT: &[&str] = &["SSH_AUTH_SOCK", "KUBECONFIG", "DATABASE_URL"];
 
 /// The one credential-shaped name a worker is allowed: its own login token.
 pub const WORKER_OWN_TOKEN: &str = "CLAUDE_CODE_OAUTH_TOKEN";
@@ -63,6 +71,7 @@ fn extra_prefixes() -> Vec<String> {
 /// assert!(credential_shaped("AWS_SECRET_ACCESS_KEY"));
 /// assert!(credential_shaped("DB_PASSWORD"));
 /// assert!(credential_shaped("NPM_TOKEN"));
+/// assert!(credential_shaped("JIRA_API_TOKEN") && credential_shaped("SSH_AUTH_SOCK"));
 /// assert!(!credential_shaped("CLAUDE_CODE_OAUTH_TOKEN"));
 /// assert!(!credential_shaped("PATH"));
 /// ```
@@ -70,7 +79,8 @@ pub fn credential_shaped(name: &str) -> bool {
     if name == WORKER_OWN_TOKEN {
         return false;
     }
-    CREDENTIAL_PREFIXES.iter().any(|p| name.starts_with(p))
+    CREDENTIAL_EXACT.contains(&name)
+        || CREDENTIAL_PREFIXES.iter().any(|p| name.starts_with(p))
         || CREDENTIAL_SUFFIXES.iter().any(|s| name.ends_with(s))
         || extra_prefixes()
             .iter()

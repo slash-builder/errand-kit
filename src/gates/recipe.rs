@@ -128,6 +128,43 @@ impl Recipe {
             "**/AGENT.md",
             "**/CLAUDE.md",
             ".claude/**",
+            // Added after the pre-publication security review: build/dependency manifests and scripts that run code on a
+            // developer's or CI's machine, other CI systems, container and IaC variables, hooks, agent configuration, tests
+            // by common naming, and the recipes themselves.
+            "**/.claude/**",
+            "**/.mcp.json",
+            "**/.cargo/**",
+            "**/Cargo.toml",
+            "**/package.json",
+            "**/.npmrc",
+            "**/conftest.py",
+            "**/pyproject.toml",
+            "**/setup.py",
+            "**/setup.cfg",
+            "**/requirements*.txt",
+            "**/go.mod",
+            "**/go.sum",
+            "**/pom.xml",
+            "**/build.gradle*",
+            "**/settings.gradle*",
+            "**/.pre-commit-config.yaml",
+            "**/.husky/**",
+            "**/.circleci/**",
+            "**/.buildkite/**",
+            "**/azure-pipelines*",
+            "**/bitbucket-pipelines*",
+            "**/.travis.yml",
+            "**/.drone.yml",
+            "**/Containerfile*",
+            "**/docker-compose*",
+            "**/*.tfvars",
+            "**/*.hcl",
+            "**/*.sh",
+            "**/scripts/**",
+            "**/recipes/**",
+            "**/test_*.py",
+            "**/*.spec.*",
+            "**/__tests__/**",
         ]
         .iter()
         .map(|s| (*s).to_string())
@@ -262,7 +299,7 @@ mod tests {
     #[test]
     fn default_protected_is_the_documented_list() {
         let p = Recipe::default_protected();
-        assert_eq!(p.len(), 27);
+        assert_eq!(p.len(), 61);
         for g in [
             "Jenkinsfile*",
             ".github/**",
@@ -332,6 +369,22 @@ mod tests {
             "JENKINSFILE",
             "cargo.LOCK",
             "makefile",
+            "sub/.claude/settings.json",
+            ".mcp.json",
+            "crates/x/.cargo/config.toml",
+            "crates/x/Cargo.toml",
+            "web/package.json",
+            "pyproject.toml",
+            "go.mod",
+            "deploy.sh",
+            "tools/scripts/release.py",
+            ".circleci/config.yml",
+            "docker-compose.prod.yml",
+            "env/prod.tfvars",
+            "tests/test_login.py",
+            "web/app.spec.ts",
+            "web/__tests__/a.js",
+            "recipes/owner__x.json",
         ] {
             assert!(m.is_match(p), "{p} must be protected");
         }

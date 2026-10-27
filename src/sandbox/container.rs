@@ -35,8 +35,13 @@ pub struct ContainerRoots {
     pub fs_root: PathBuf,
     /// The environment to inspect for `DOCKER_HOST` (normally this process's own).
     pub env: BTreeMap<String, String>,
-    /// Mount points (and everything under them) that may be writable. They must also be `nosuid,nodev`.
+    /// Mount points (and everything under them) that may be writable. (`nosuid,nodev` on them is reported, not required.)
     pub writable_allowlist: Vec<String>,
+    /// If true (the default for a real run), a refused write to the root only counts as proof if the error is "read-only
+    /// filesystem". A permission error proves nothing: a non-root user is refused on a read-write root too.
+    pub require_erofs: bool,
+    /// File names allowed in `/run/secrets` (the worker's own token file). Any other secret file is a credential and refuses the run.
+    pub allowed_secret_files: Vec<String>,
 }
 
 impl ContainerRoots {
@@ -65,6 +70,8 @@ impl ContainerRoots {
                 .iter()
                 .map(|s| (*s).to_owned())
                 .collect(),
+            require_erofs: true,
+            allowed_secret_files: vec!["claude-token".to_owned()],
         }
     }
 }
@@ -116,10 +123,11 @@ impl ContainerBoundary {
             check_status_field(&r.proc_root, "no_new_privs", "NoNewPrivs", "1"),
             check_status_field(&r.proc_root, "seccomp_filter", "Seccomp", "2"),
             check_root_readonly(&mounts),
-            check_root_write_fails(&r.fs_root),
+            check_root_write_fails(&r.fs_root, r.require_erofs),
             check_writable_mounts(&mounts, &r.writable_allowlist),
             check_writable_mount_flags(&mounts, &r.writable_allowlist),
-            check_container_sockets(&r.fs_root, &r.env),
+            check_container_sockets(&r.fs_root, &r.env, &r.writable_allowlist),
+            check_credential_files(&r.fs_root, &r.env, &r.allowed_secret_files),
             check_proc_environ(&r.proc_root),
             check_cgroup(&r.fs_root, "cgroup_memory_limited", "memory.max"),
             check_cgroup(&r.fs_root, "cgroup_pids_limited", "pids.max"),
@@ -340,7 +348,7 @@ fn check_root_readonly(mounts: &Option<Vec<Mount>>) -> Check {
 
 static PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn check_root_write_fails(fs_root: &Path) -> Check {
+fn check_root_write_fails(fs_root: &Path, require_erofs: bool) -> Check {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -383,12 +391,28 @@ fn check_root_write_fails(fs_root: &Path) -> Check {
                 fs_root.display()
             ),
         ),
-        Err(e) => check(
-            "root_write_fails",
-            true,
-            true,
-            format!("write to {} refused: {}", fs_root.display(), e.kind()),
-        ),
+        Err(e) => {
+            let erofs = e.kind() == std::io::ErrorKind::ReadOnlyFilesystem;
+            if erofs || !require_erofs {
+                check(
+                    "root_write_fails",
+                    true,
+                    true,
+                    format!("write to {} refused: {}", fs_root.display(), e.kind()),
+                )
+            } else {
+                check(
+                    "root_write_fails",
+                    true,
+                    false,
+                    format!(
+                        "write to {} was refused as {:?}, not as a read-only filesystem: a non-root user is refused on a read-write root too, so this proves nothing",
+                        fs_root.display(),
+                        e.kind()
+                    ),
+                )
+            }
+        }
     }
 }
 
@@ -499,7 +523,49 @@ fn exists_nofollow(p: &Path) -> bool {
     fs::symlink_metadata(p).is_ok()
 }
 
-fn check_container_sockets(fs_root: &Path, env: &BTreeMap<String, String>) -> Check {
+/// Look for a socket file (a runtime socket bind-mounted somewhere unusual, like `/tmp/docker.sock`) in the writable allowlisted
+/// directories. Bounded in depth and entries; symlinks are not followed.
+#[cfg(unix)]
+fn find_sockets(fs_root: &Path, allowlist: &[String]) -> Vec<String> {
+    use std::os::unix::fs::FileTypeExt;
+    const MAX_DEPTH: usize = 4;
+    const MAX_ENTRIES: usize = 20_000;
+    let mut found = Vec::new();
+    let mut seen = 0usize;
+    let mut stack: Vec<(PathBuf, usize, String)> = allowlist
+        .iter()
+        .map(|a| (fs_root.join(a.trim_start_matches('/')), 0, a.clone()))
+        .collect();
+    while let Some((dir, depth, shown)) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > MAX_ENTRIES {
+                return found;
+            }
+            let Ok(ft) = e.file_type() else { continue };
+            let name = e.file_name().to_string_lossy().into_owned();
+            let shown_path = format!("{}/{}", shown.trim_end_matches('/'), name);
+            if ft.is_socket() {
+                found.push(shown_path);
+            } else if ft.is_dir() && depth < MAX_DEPTH {
+                stack.push((e.path(), depth + 1, shown_path));
+            }
+        }
+    }
+    found
+}
+
+#[cfg(not(unix))]
+fn find_sockets(_fs_root: &Path, _allowlist: &[String]) -> Vec<String> {
+    Vec::new()
+}
+
+fn check_container_sockets(
+    fs_root: &Path,
+    env: &BTreeMap<String, String>,
+    allowlist: &[String],
+) -> Check {
     let name = "no_container_sockets";
     let rel = |p: &str| fs_root.join(p.trim_start_matches('/'));
     let mut found: Vec<String> = Vec::new();
@@ -524,6 +590,9 @@ fn check_container_sockets(fs_root: &Path, env: &BTreeMap<String, String>) -> Ch
             }
         }
     }
+    for sock in find_sockets(fs_root, allowlist) {
+        found.push(format!("socket file {sock}"));
+    }
     found.sort();
     // The name only: DOCKER_HOST can carry credentials in its value.
     if env.contains_key("DOCKER_HOST") {
@@ -538,6 +607,73 @@ fn check_container_sockets(fs_root: &Path, env: &BTreeMap<String, String>) -> Ch
         )
     } else {
         check(name, true, false, format!("found: {}", found.join(", ")))
+    }
+}
+
+// ---- credential FILES --------------------------------------------------------------------------------------------------
+
+/// Well-known places where a credential lives as a FILE. Relative to `$HOME` unless they start with `/`.
+const CREDENTIAL_FILES: &[&str] = &[
+    "/var/run/secrets/kubernetes.io/serviceaccount/token",
+    "/run/secrets/kubernetes.io/serviceaccount/token",
+    ".aws/credentials",
+    ".git-credentials",
+    ".netrc",
+    ".npmrc",
+    ".docker/config.json",
+    ".config/gh/hosts.yml",
+    ".ssh/id_rsa",
+    ".ssh/id_ed25519",
+    ".ssh/id_ecdsa",
+    ".ssh/id_dsa",
+];
+
+/// A credential kept in a FILE is as much a credential as one in the environment. Required: none of the well-known credential
+/// files exists, and `/run/secrets` holds nothing but the worker's own token file. Names only; no file is ever read.
+fn check_credential_files(
+    fs_root: &Path,
+    env: &BTreeMap<String, String>,
+    allowed_secret_files: &[String],
+) -> Check {
+    let name = "credential_files_absent";
+    let home = env
+        .get("HOME")
+        .map(String::as_str)
+        .unwrap_or("/home/runner");
+    let mut found: Vec<String> = Vec::new();
+    for f in CREDENTIAL_FILES {
+        let shown = if f.starts_with('/') {
+            (*f).to_owned()
+        } else {
+            format!("{}/{}", home.trim_end_matches('/'), f)
+        };
+        if exists_nofollow(&fs_root.join(shown.trim_start_matches('/'))) {
+            found.push(shown);
+        }
+    }
+    if let Ok(rd) = fs::read_dir(fs_root.join("run/secrets")) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if !allowed_secret_files.contains(&n) {
+                found.push(format!("/run/secrets/{n}"));
+            }
+        }
+    }
+    found.sort();
+    if found.is_empty() {
+        check(
+            name,
+            true,
+            true,
+            "no well-known credential file and no unexpected /run/secrets entry",
+        )
+    } else {
+        check(
+            name,
+            true,
+            false,
+            format!("credential files present: {}", found.join(", ")),
+        )
     }
 }
 
@@ -650,16 +786,23 @@ fn check_proc_environ(proc_root: &Path) -> Check {
             ),
         );
     }
-    let note = if unreadable > 0 {
-        format!("; {unreadable} not readable (other users)")
-    } else {
-        String::new()
-    };
+    if unreadable > 0 {
+        // A process whose environment cannot be read (another user, hidepid) might hold a credential; the Kit cannot prove it
+        // does not, so it refuses. A container with a credentialed sidecar process is exactly the case this exists for.
+        return check(
+            name,
+            true,
+            false,
+            format!(
+                "{unreadable} process(es) whose environment could not be read ({readable} scanned): cannot prove they hold no credential"
+            ),
+        );
+    }
     check(
         name,
         true,
         true,
-        format!("{readable} environ file(s) scanned, no credential-shaped names{note}"),
+        format!("{readable} environ file(s) scanned, no credential-shaped names"),
     )
 }
 
@@ -803,7 +946,11 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
         }
 
         fn boundary(&self) -> ContainerBoundary {
-            ContainerBoundary::with_roots(ContainerRoots {
+            ContainerBoundary::with_roots(self.roots())
+        }
+
+        fn roots(&self) -> ContainerRoots {
+            ContainerRoots {
                 proc_root: self.dir.path().join("proc"),
                 mountinfo: self.dir.path().join("mountinfo"),
                 fs_root: self.root(),
@@ -812,7 +959,10 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
                     .iter()
                     .map(|s| (*s).to_owned())
                     .collect(),
-            })
+                // The fake tree cannot produce EROFS (it uses chmod), so the lenient rule applies here; the strict rule has its own test.
+                require_erofs: false,
+                allowed_secret_files: vec!["claude-token".to_owned()],
+            }
         }
 
         fn report(&self) -> BoundaryReport {
@@ -870,6 +1020,7 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
                 "writable_mounts_allowlisted",
                 "writable_mounts_nosuid_nodev",
                 "no_container_sockets",
+                "credential_files_absent",
                 "proc_environ_clean",
                 "cgroup_memory_limited",
                 "cgroup_pids_limited",
@@ -1312,13 +1463,101 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
     }
 
     #[test]
-    fn unreadable_environ_files_are_counted_not_fatal() {
+    fn a_process_whose_environment_cannot_be_read_refuses_the_run() {
+        // It might be a credentialed sidecar running as another user. The Kit cannot prove it holds nothing, so it refuses.
         let f = Fake::clean();
         fs::create_dir_all(f.dir.path().join("proc/300")).unwrap(); // pid dir without an environ file
         let r = f.report();
         let c = get(&r, "proc_environ_clean");
+        assert!(!c.ok && c.required, "{}", c.detail);
+        assert!(c.detail.contains("could not be read"), "{}", c.detail);
+        assert!(!r.ok);
+    }
+
+    #[test]
+    fn credential_files_refuse_the_run_and_are_reported_by_name_only() {
+        for (rel, shown) in [
+            (
+                "root/home/runner/.aws/credentials",
+                "/home/runner/.aws/credentials",
+            ),
+            ("root/home/runner/.netrc", "/home/runner/.netrc"),
+            (
+                "root/home/runner/.git-credentials",
+                "/home/runner/.git-credentials",
+            ),
+            (
+                "root/home/runner/.ssh/id_ed25519",
+                "/home/runner/.ssh/id_ed25519",
+            ),
+            (
+                "root/var/run/secrets/kubernetes.io/serviceaccount/token",
+                "/var/run/secrets/kubernetes.io/serviceaccount/token",
+            ),
+            ("root/run/secrets/db-password", "/run/secrets/db-password"),
+        ] {
+            let f = Fake::clean();
+            f.set_root_readonly(false); // the fixture root is read-only; unlock it to plant the file
+            f.write(rel, "do-not-print-this-value");
+            let r = f.report();
+            let c = get(&r, "credential_files_absent");
+            assert!(!c.ok && c.required, "{rel}");
+            assert!(c.detail.contains(shown), "{}", c.detail);
+            assert!(!serde_json::to_string(&r)
+                .unwrap()
+                .contains("do-not-print-this-value"));
+        }
+    }
+
+    #[test]
+    fn the_workers_own_token_file_in_run_secrets_is_allowed() {
+        let f = Fake::clean();
+        f.set_root_readonly(false);
+        f.write("root/run/secrets/claude-token", "tok");
+        let c = get(&f.report(), "credential_files_absent").clone();
         assert!(c.ok, "{}", c.detail);
-        assert!(c.detail.contains("1 not readable"), "{}", c.detail);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_container_runtime_socket_anywhere_writable_refuses_the_run() {
+        let f = Fake::clean();
+        f.set_root_readonly(false);
+        fs::create_dir_all(f.root().join("tmp/deep/er")).unwrap();
+        let _listener =
+            std::os::unix::net::UnixListener::bind(f.root().join("tmp/deep/er/docker.sock"))
+                .unwrap();
+        let r = f.report();
+        let c = get(&r, "no_container_sockets");
+        assert!(!c.ok && c.required, "{}", c.detail);
+        assert!(
+            c.detail.contains("socket file /tmp/deep/er/docker.sock"),
+            "{}",
+            c.detail
+        );
+    }
+
+    #[test]
+    fn a_permission_error_does_not_prove_the_root_is_read_only() {
+        if running_as_root() {
+            return;
+        }
+        // chmod 555 gives EACCES, which a non-root user also gets on a read-WRITE root. With the strict rule that is not proof.
+        let f = Fake::clean();
+        f.set_root_readonly(true);
+        let strict = ContainerBoundary::with_roots(ContainerRoots {
+            require_erofs: true,
+            ..f.roots()
+        });
+        let c = get(&strict.verify_roots(), "root_write_fails").clone();
+        assert!(!c.ok && c.required, "{}", c.detail);
+        assert!(c.detail.contains("proves nothing"), "{}", c.detail);
+        // The lenient rule (used only by tests that cannot make EROFS) accepts it.
+        let lenient = ContainerBoundary::with_roots(ContainerRoots {
+            require_erofs: false,
+            ..f.roots()
+        });
+        assert!(get(&lenient.verify_roots(), "root_write_fails").ok);
     }
 
     #[test]
