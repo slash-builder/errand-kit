@@ -16,7 +16,7 @@ pipeline {
   }
 
   environment {
-    CARGO_HOME = "${WORKSPACE}/.cargo"
+    CARGO_HOME = "/tmp/cargo-home"   // outside the workspace: nothing cargo caches (advisory db, registry) can end up in a package
   }
 
   stages {

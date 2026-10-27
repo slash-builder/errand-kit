@@ -14,7 +14,7 @@ categories = ["development-tools"]
 # Only the registries named here can be published to: crates.io and the studio's internal Nexus (`lockamy-hosted`).
 publish = ["crates-io", "lockamy-hosted"]
 # An allow-list, not an exclude: a Jenkinsfile, CI scripts, internal docs or this repo's hidden files can never ship by accident.
-include = ["src/", "README.md", "LICENSE", "CHANGELOG.md", "spec/", "schema/", "fixtures/"]
+include = ["/src/", "/README.md", "/LICENSE", "/CHANGELOG.md", "/spec/", "/schema/", "/fixtures/"]
 
 [package.metadata.docs.rs]
 all-features = true
