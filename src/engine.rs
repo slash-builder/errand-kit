@@ -33,7 +33,7 @@ pub const EXIT_GATE: i32 = 73;
 pub const EXIT_NO_DIGEST: i32 = 70;
 
 /// Environment variables a worker may inherit from its launcher. Everything else is dropped.
-pub const WORKER_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG", "LC_ALL", "TERM", "TZ"];
+pub const WORKER_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "TERM", "TZ"];
 
 /// What the model phase needs besides the task.
 pub struct ModelOptions<'a> {
