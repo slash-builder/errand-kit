@@ -72,11 +72,11 @@ validates any patch itself before a human sees it.
   risk.** It runs in the Kit's own context, beside the worker's token and with the container's open egress, so a worker that adds a
   test that reads the token and sends it out defeats the allowlist, redaction and the secret scan. For that reason a recipe may use
   only the inspect-only programs (`test`, `grep`, `diff`, `jq`, ...) unless it sets `gate_commands_execute_tree: true`, and you
-  should set that only when the recipe's `scope` cannot hold executable code, or when the egress is closed. Running such commands
+  should set that only when the egress is closed (a narrow `scope` is not enough: `cargo test` runs doctests from Markdown). Running such commands
   in a separate, network-less, credential-less phase is future work.
 * The patch's SHA-256 is recorded in the output directory, which a detached process started by a gate command could rewrite. The
   `errand` binary also prints `errand: patch_sha256=<hash>` on its own standard error; a trusted phase should compare that line
-  with `patch.diff` rather than trusting only the files.
+  with `patch.diff` rather than trusting only the files, and should refuse if that line appears more than once.
 * The outbox has no cross-process lock; two processes sharing one outbox directory can duplicate a delivery.
 * A secret-shaped string (other than the worker's own token) found in the digest fails the run but is not redacted from the digest,
   which the CLI also prints. Treat a failed run's output as sensitive.

@@ -397,6 +397,7 @@ pub struct CommandGate {
     pub timeout: std::time::Duration,
 }
 
+// NOTE: building a `CommandGate` directly skips the recipe's inspect-only check; construct gates from a validated `Recipe`.
 impl Gate for CommandGate {
     fn name(&self) -> &str {
         "command"

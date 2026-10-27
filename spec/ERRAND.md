@@ -95,7 +95,7 @@ Every gate returns a `GateResult { name, kind, ok, hard, detail }`; any failed h
 * `command`: run a recipe-defined argv in the worker's tree with an empty environment and a time limit; exit 0 expected. **These run
   files the worker may have written (for example `cargo test`), so they run ONLY after every other hard gate has passed, never on a
   rejected patch, and nothing they do can change what is recorded:** the patch is built and validated in memory first, and
-  `patch.diff`, `digest.md` and `run.json` are written by the engine afterwards. A recipe may use only inspect-only programs (`test`, `grep`, `diff`, `jq`, ...) unless it sets `gate_commands_execute_tree: true`: a command that executes tree code runs in the Kit's context beside the worker's token with open egress, so it re-opens the shell-plus-egress risk and is opt-in, never default.
+  `patch.diff`, `digest.md` and `run.json` are written by the engine afterwards. A recipe may use only inspect-only programs (`test`, `grep`, `diff`, `jq`, ...) unless it sets `gate_commands_execute_tree: true`: a command that executes tree code runs in the Kit's context beside the worker's token with open egress, so it re-opens the shell-plus-egress risk and is opt-in, never default; opt in only when egress is closed (a narrow scope is not enough: doctests run from Markdown).
 
 **Scope globs, protected-glob exceptions and gate commands come only from a repo-side recipe (`recipes/<repo>.toml`), never from
 a tracker field or alert text.** Ticket and alert text is data: it goes into the prompt between delimiters and is never

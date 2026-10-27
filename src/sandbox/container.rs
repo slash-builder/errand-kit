@@ -528,10 +528,11 @@ fn exists_nofollow(p: &Path) -> bool {
 #[cfg(unix)]
 fn find_sockets(fs_root: &Path, allowlist: &[String]) -> (Vec<String>, bool) {
     use std::os::unix::fs::FileTypeExt;
-    const MAX_DEPTH: usize = 4;
+    const MAX_DEPTH: usize = 64; // the entry budget is the real bound; a deeper tree is reported incomplete
     const MAX_ENTRIES: usize = 400_000;
     let mut found = Vec::new();
     let mut seen = 0usize;
+    let mut too_deep = false;
     // The writable allowlisted directories, plus the places a runtime or user-session socket lives. The small fixed roots are
     // pushed LAST so they are scanned FIRST: a huge repository under /work must not be able to starve them of the entry budget.
     let mut roots: Vec<String> = allowlist.to_vec();
@@ -556,12 +557,16 @@ fn find_sockets(fs_root: &Path, allowlist: &[String]) -> (Vec<String>, bool) {
             let shown_path = format!("{}/{}", shown.trim_end_matches('/'), name);
             if ft.is_socket() {
                 found.push(shown_path);
-            } else if ft.is_dir() && depth < MAX_DEPTH {
-                stack.push((e.path(), depth + 1, shown_path));
+            } else if ft.is_dir() {
+                if depth < MAX_DEPTH {
+                    stack.push((e.path(), depth + 1, shown_path));
+                } else {
+                    too_deep = true; // not looked into: an incomplete scan is reported, never called clean
+                }
             }
         }
     }
-    (found, false)
+    (found, too_deep)
 }
 
 #[cfg(not(unix))]
