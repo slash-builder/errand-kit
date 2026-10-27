@@ -122,6 +122,8 @@ impl Gate for EnvCleanGate {
 pub struct ToolsMatchGate {
     /// What was requested.
     pub requested: Vec<String>,
+    /// If true, a worker that reports no tool list FAILS the gate (the real worker always can; only a scripted test worker may not).
+    pub require_report: bool,
 }
 
 impl Gate for ToolsMatchGate {
@@ -139,9 +141,13 @@ impl Gate for ToolsMatchGate {
             return result(
                 "tools_match",
                 "tools_match",
+                !self.require_report,
                 true,
-                true,
-                "worker did not report its tools (not verified)",
+                if self.require_report {
+                    "the worker did not report its tools, so the allowlist could not be verified"
+                } else {
+                    "worker did not report its tools (not verified)"
+                },
             );
         };
         let mut want = self.requested.clone();
@@ -238,6 +244,109 @@ impl Gate for StatusLineGate {
     }
 }
 
+/// Secret-shaped strings: a prefix followed by at least `min` token characters.
+const SECRET_SHAPES: &[(&str, usize, &str)] = &[
+    ("sk-ant-", 16, "an Anthropic API key"),
+    ("ghp_", 30, "a GitHub token"),
+    ("gho_", 30, "a GitHub token"),
+    ("ghs_", 30, "a GitHub token"),
+    ("ghu_", 30, "a GitHub token"),
+    ("github_pat_", 30, "a GitHub token"),
+    ("AKIA", 16, "an AWS access key id"),
+    ("ASIA", 16, "an AWS temporary access key id"),
+    ("xoxb-", 10, "a Slack token"),
+    ("xoxp-", 10, "a Slack token"),
+    ("xoxa-", 10, "a Slack token"),
+    ("xoxs-", 10, "a Slack token"),
+];
+
+/// The first secret-shaped thing in `text`, as a label (never the value).
+///
+/// ```
+/// use errand_kit::gates::builtin::secret_shaped;
+/// // Built at run time so this documentation contains no secret-shaped literal.
+/// let key = format!("key {}{} here", "AKIA", "ABCDEFGHIJKLMNOP");
+/// assert!(secret_shaped(&key).is_some());
+/// let pem = format!("-----BEGIN RSA {}-----", "PRIVATE KEY");
+/// assert!(secret_shaped(&pem).is_some());
+/// assert!(secret_shaped("an ordinary sentence about keys").is_none());
+/// ```
+pub fn secret_shaped(text: &str) -> Option<&'static str> {
+    if text.contains("PRIVATE KEY-----") && text.contains("-----BEGIN") {
+        return Some("a private key block");
+    }
+    for (prefix, min, label) in SECRET_SHAPES {
+        let mut from = 0;
+        while let Some(i) = text[from..].find(prefix) {
+            let start = from + i + prefix.len();
+            let n = text[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .count();
+            if n >= *min {
+                return Some(label);
+            }
+            from = start;
+        }
+    }
+    None
+}
+
+/// Fails if the digest or an ADDED line of the patch contains a secret-shaped string or the worker's own token. A prompt-injected
+/// worker can read its token from its environment or a mounted file; this stops it reaching a ticket comment, a chat message or a
+/// pushed branch. The detail names the kind of secret, never the value.
+#[derive(Debug, Clone, Default)]
+pub struct SecretScanGate {
+    /// The worker's own token, if it has one (exact match, 8 bytes or longer).
+    pub token: Option<String>,
+}
+
+impl Gate for SecretScanGate {
+    fn name(&self) -> &str {
+        "secret_scan"
+    }
+    fn kind(&self) -> &str {
+        "secret_scan"
+    }
+    fn hard(&self) -> bool {
+        true
+    }
+    fn check(&self, ctx: &GateContext<'_>) -> GateResult {
+        let added: String = ctx
+            .patch
+            .map(|p| {
+                p.lines()
+                    .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let digest = ctx.digest.unwrap_or_default();
+        let mut found: Vec<String> = Vec::new();
+        for (where_, text) in [("the digest", digest), ("the patch", added.as_str())] {
+            if let Some(label) = secret_shaped(text) {
+                found.push(format!("{label} in {where_}"));
+            }
+            if let Some(t) = &self.token {
+                if t.len() >= 8 && text.contains(t.as_str()) {
+                    found.push(format!("the worker's own token in {where_}"));
+                }
+            }
+        }
+        if found.is_empty() {
+            result(
+                "secret_scan",
+                "secret_scan",
+                true,
+                true,
+                "no secret-shaped strings in the digest or the patch's added lines",
+            )
+        } else {
+            result("secret_scan", "secret_scan", false, true, found.join("; "))
+        }
+    }
+}
+
 /// Validate the worker's patch text against a repo-side recipe, before anything is applied.
 #[derive(Debug, Clone)]
 pub struct DiffScopeGate {
@@ -288,6 +397,7 @@ pub struct CommandGate {
     pub timeout: std::time::Duration,
 }
 
+// NOTE: building a `CommandGate` directly skips the recipe's inspect-only check; construct gates from a validated `Recipe`.
 impl Gate for CommandGate {
     fn name(&self) -> &str {
         "command"
@@ -494,6 +604,7 @@ mod tests {
         };
         let g = ToolsMatchGate {
             requested: vec!["Read".into(), "Grep".into()],
+            require_report: false,
         };
         assert!(
             g.check(&ctx(

@@ -467,6 +467,14 @@
             "null"
           ]
         },
+        "patch_sha256": {
+          "description": "SHA-256 (hex) of the patch text the Kit built and validated. A consumer MUST verify the file it is about to apply against this value: the output directory is writable by code the recipe's gate commands may have run.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "files_changed": {
           "description": "Files the patch touches, as parsed from the patch text by the Kit (not as claimed by the worker).",
           "type": "array",

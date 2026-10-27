@@ -1,5 +1,5 @@
 //! The data contract. Every type here is serialised to JSON, has a generated JSON Schema in `schema/`, and is covered by the
-//! shared fixtures in `fixtures/`. Other implementations (the Python reference engine) and consumers (Courier, in Dart) are
+//! shared fixtures in `fixtures/`. Other implementations and consumers (for example a Dart client app) are
 //! tested against the same files.
 
 use std::fmt;
@@ -220,6 +220,10 @@ pub struct HandBack {
     /// Relative path of the patch file inside the run's output directory.
     #[serde(default)]
     pub patch: Option<String>,
+    /// SHA-256 (hex) of the patch text the Kit built and validated. A consumer MUST verify the file it is about to apply against
+    /// this value: the output directory is writable by code the recipe's gate commands may have run.
+    #[serde(default)]
+    pub patch_sha256: Option<String>,
     /// Files the patch touches, as parsed from the patch text by the Kit (not as claimed by the worker).
     pub files_changed: Vec<String>,
     /// What the worker says it did. Untrusted prose.
@@ -323,7 +327,7 @@ pub struct GovernorDecision {
     pub reason: String,
 }
 
-/// The engine part of the queue snapshot Courier reads.
+/// The engine part of the queue snapshot a client app reads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueEngine {
     /// The engine process is alive.
@@ -354,6 +358,77 @@ pub struct QueueLimits {
     /// Age of the usage report, seconds.
     #[serde(default)]
     pub report_age_s: Option<i64>,
+    /// The ceilings the engine pauses at, when it reports them.
+    #[serde(default)]
+    pub ceilings: Option<QueueCeilings>,
+}
+
+/// The usage ceilings the engine pauses at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct QueueCeilings {
+    /// Five-hour ceiling, 0.0 to 1.0.
+    #[serde(default)]
+    pub five_hour: Option<f64>,
+    /// Seven-day ceiling, 0.0 to 1.0.
+    #[serde(default)]
+    pub seven_day: Option<f64>,
+}
+
+/// A repository the engine can take work for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct QueueRepo {
+    /// `owner/name`.
+    pub name: String,
+    /// Display name.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Whether the engine may implement (not only refine) work here.
+    #[serde(default)]
+    pub can_implement: bool,
+    /// Whether the repository is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// A recent run, as a client app lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct QueueRun {
+    /// Run id.
+    pub id: String,
+    /// The ticket key.
+    pub key: String,
+    /// The lane it ran in.
+    #[serde(default)]
+    pub lane: Option<String>,
+    /// The executor.
+    #[serde(default)]
+    pub executor: Option<String>,
+    /// The run's state.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+/// Whether the engine can host chat sessions, and what is missing. No secrets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct QueueChat {
+    /// Chat is switched on.
+    #[serde(default)]
+    pub enabled: bool,
+    /// `present` or `missing`.
+    #[serde(default)]
+    pub credential: Option<String>,
+    /// `clean`, `findings` or `unknown`.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// Number of workspace findings.
+    #[serde(default)]
+    pub findings: u32,
+    /// Live chat sessions.
+    #[serde(default)]
+    pub live_sessions: u32,
+    /// Enabled, credentialed and clean.
+    #[serde(default)]
+    pub ready: bool,
 }
 
 /// A pull request attached to a ticket.
@@ -373,7 +448,7 @@ pub struct QueuePr {
     pub sha: Option<String>,
 }
 
-/// A ticket as Courier shows it.
+/// A ticket as a client app shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueTicket {
     /// The ticket key, e.g. `QR-12`.
@@ -410,20 +485,35 @@ pub struct QueueTicket {
     /// The attached PR.
     #[serde(default)]
     pub pr: Option<QueuePr>,
+    /// True if the ticket needs a repository before it can be readied.
+    #[serde(default)]
+    pub needs_repo: bool,
+    /// A repository the engine suggests for this ticket.
+    #[serde(default)]
+    pub suggested_repo: Option<String>,
 }
 
-/// The snapshot the engine publishes and Courier reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.
+/// The snapshot the engine publishes and a client app reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct QueueSnapshot {
     /// Engine state.
     pub engine: QueueEngine,
     /// Usage limits.
     pub limits: QueueLimits,
+    /// Repositories the engine can take work for.
+    #[serde(default)]
+    pub repos: Vec<QueueRepo>,
     /// Tickets.
     pub tickets: Vec<QueueTicket>,
+    /// Recent runs.
+    #[serde(default)]
+    pub runs: Vec<QueueRun>,
     /// An error from reading the board, if any.
     #[serde(default)]
     pub board_error: Option<String>,
-    /// When the snapshot was published, epoch seconds.
-    pub published_at: i64,
+    /// Chat readiness; absent on engines that predate it (a client treats that as unknown).
+    #[serde(default)]
+    pub chat: Option<QueueChat>,
+    /// When the snapshot was published, epoch seconds. A NUMBER: real engines write a fractional clock reading.
+    pub published_at: f64,
 }

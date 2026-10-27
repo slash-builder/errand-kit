@@ -80,6 +80,12 @@ pub fn build_args(req: &WorkerRequest) -> Vec<OsString> {
         format!("--tools={list}").into(),
         format!("--allowedTools={list}").into(),
         "--strict-mcp-config".into(),
+        // Do NOT load project or local settings: a repository's own `.claude/settings.json` can define hooks, an apiKeyHelper or a
+        // status line, which are shell commands run inside the worker's container with open egress, i.e. a shell (verified:
+        // with default settings a project SessionStart hook ran). Only user settings load, and the engine gives the worker an empty HOME.
+        "--setting-sources".into(),
+        "user".into(),
+        "--disable-slash-commands".into(),
         "--max-turns".into(),
         req.max_turns.to_string().into(),
         "--no-session-persistence".into(),
@@ -108,15 +114,41 @@ struct Summary {
     malformed: usize,
 }
 
+/// The longest stream line that is parsed. A longer one is counted as malformed and skipped, so a hostile or broken CLI cannot
+/// make the reader allocate without limit.
+const MAX_LINE_BYTES: u64 = 16 * 1024 * 1024;
+
 fn read_stream(r: impl Read) -> Summary {
     let mut s = Summary::default();
     let mut reader = BufReader::new(r);
     let mut buf = Vec::new();
     loop {
         buf.clear();
-        match reader.read_until(b'\n', &mut buf) {
+        match reader
+            .by_ref()
+            .take(MAX_LINE_BYTES)
+            .read_until(b'\n', &mut buf)
+        {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
+        }
+        if buf.last() != Some(&b'\n') && buf.len() as u64 >= MAX_LINE_BYTES {
+            // Over the cap with no newline yet: discard the rest of this line and count it.
+            s.malformed += 1;
+            let mut sink = Vec::new();
+            loop {
+                sink.clear();
+                match reader
+                    .by_ref()
+                    .take(MAX_LINE_BYTES)
+                    .read_until(b'\n', &mut sink)
+                {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) if sink.last() == Some(&b'\n') => break,
+                    Ok(_) => {}
+                }
+            }
+            continue;
         }
         let line = String::from_utf8_lossy(&buf);
         let line = line.trim();
@@ -338,6 +370,30 @@ printf '%s\n' '{"type":"result","is_error":false,"result":"all good\nSTATUS: OK"
         assert!(a.contains(&"--add-dir=/a".to_string()) && a.contains(&"--add-dir=/b".to_string()));
         let i = a.iter().position(|x| x == "--output-format").unwrap();
         assert_eq!(a[i + 1], "stream-json");
+    }
+
+    #[test]
+    fn project_and_local_settings_never_load() {
+        // A repository's own .claude/settings.json can define hooks (shell commands). Only user settings may load.
+        let a = strs(&build_args(&req(Path::new("/tmp"))));
+        let i = a.iter().position(|x| x == "--setting-sources").unwrap();
+        assert_eq!(a[i + 1], "user");
+        assert!(a.contains(&"--disable-slash-commands".to_string()));
+        // And the flag must come before the prompt separator.
+        assert!(i < a.iter().position(|x| x == "--").unwrap());
+    }
+
+    #[test]
+    fn an_overlong_stream_line_is_skipped_not_buffered_forever() {
+        let mut data = vec![b'x'; (MAX_LINE_BYTES as usize) + 10];
+        data.push(b'\n');
+        data.extend_from_slice(b"{\"type\":\"result\",\"result\":\"ok\"}\n");
+        let s = read_stream(std::io::Cursor::new(data));
+        assert_eq!(s.malformed, 1);
+        assert!(
+            s.result.is_some(),
+            "the line after the oversized one is still read"
+        );
     }
 
     #[test]

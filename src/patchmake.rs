@@ -92,9 +92,20 @@ fn clear_except_git(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A `git` invocation with every configuration source switched off, run in `repo`.
+/// Longest a single `git` call may take. The worker controls the tree, so it controls how much work git has to do.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Longest output kept from a `git` call; git's own output is read from files, so a flood of warnings cannot fill a pipe and block.
+const GIT_OUTPUT_CAP: u64 = 64 * 1024 * 1024;
+
+/// A `git` invocation with every configuration source switched off, run in `repo`. Output goes to files in `scratch` (never
+/// to pipes, which a verbose git can fill and deadlock on) and the call is killed after [`GIT_TIMEOUT`].
 fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
+    use std::io::Read;
+    let out_path = scratch.join("git.stdout");
+    let err_path = scratch.join("git.stderr");
+    let out_file = std::fs::File::create(&out_path).map_err(|e| io(&out_path, e))?;
+    let err_file = std::fs::File::create(&err_path).map_err(|e| io(&err_path, e))?;
+    let mut child = Command::new("git")
         .current_dir(repo)
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -112,6 +123,8 @@ fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
             "-c",
             "core.autocrlf=false",
             "-c",
+            "core.safecrlf=false",
+            "-c",
             "core.symlinks=true",
             "-c",
             "commit.gpgsign=false",
@@ -121,16 +134,45 @@ fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
             "user.email=errand@localhost",
         ])
         .args(args)
-        .output()
+        .stdin(std::process::Stdio::null())
+        .stdout(out_file)
+        .stderr(err_file)
+        .spawn()
         .map_err(|e| ErrandError::Patch(format!("could not run git: {e}")))?;
-    if !out.status.success() {
+    let deadline = std::time::Instant::now() + GIT_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ErrandError::Patch(format!(
+                    "git {} timed out after {}s",
+                    args.first().copied().unwrap_or(""),
+                    GIT_TIMEOUT.as_secs()
+                )));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(e) => return Err(ErrandError::Patch(format!("could not wait for git: {e}"))),
+        }
+    };
+    let read = |p: &Path, cap: u64| -> Result<String> {
+        let mut buf = Vec::new();
+        std::fs::File::open(p)
+            .map_err(|e| io(p, e))?
+            .take(cap)
+            .read_to_end(&mut buf)
+            .map_err(|e| io(p, e))?;
+        Ok(String::from_utf8_lossy(&buf).into_owned())
+    };
+    if !status.success() {
         return Err(ErrandError::Patch(format!(
             "git {} failed: {}",
             args.first().copied().unwrap_or(""),
-            String::from_utf8_lossy(&out.stderr).trim()
+            read(&err_path, 4096)?.trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    read(&out_path, GIT_OUTPUT_CAP)
 }
 
 /// Build a git-format patch of the differences between `dirs.base` and `dirs.tree`, using `scratch` (an empty or absent
@@ -139,6 +181,11 @@ fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
 /// The patch uses `--no-renames` (a rename is a delete plus an add), `--binary` and `--full-index`, and no external diff
 /// driver or text conversion.
 pub fn make_patch(dirs: &WorkDirs, scratch: &Path) -> Result<String> {
+    // The scratch directory must be FRESH. If a `.git` from an earlier (or planted) run is already there, `git init` would keep its
+    // configuration, and a filter or hook configured in it would run during `git add`.
+    if scratch.exists() {
+        std::fs::remove_dir_all(scratch).map_err(|e| io(scratch, e))?;
+    }
     let repo = scratch.join("repo");
     std::fs::create_dir_all(&repo).map_err(|e| io(&repo, e))?;
     git(&repo, scratch, &["init", "-q"])?;
@@ -193,6 +240,36 @@ mod tests {
         write(&w, "docs/a.md", "one\ntwo\n");
         write(&w, "keep.txt", "same\n");
         WorkDirs { base: b, tree: w }
+    }
+
+    #[test]
+    fn a_planted_scratch_repository_is_wiped_and_cannot_run_anything() {
+        if !have_git() {
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let d = dirs(t.path());
+        let scratch = t.path().join("scratch");
+        let marker = t.path().join("PWNED");
+        // Plant a .git with a clean filter that would touch the marker if it ever ran.
+        write(
+            &scratch,
+            "repo/.git/config",
+            &format!(
+                "[filter \"x\"]\n\tclean = touch {}\n[core]\n\tfsmonitor = touch {}\n",
+                marker.display(),
+                marker.display()
+            ),
+        );
+        write(&scratch, "repo/.git/HEAD", "ref: refs/heads/main\n");
+        write(&d.tree, ".gitattributes", "* filter=x\n");
+        write(&d.tree, "docs/a.md", "changed\n");
+        let p = make_patch(&d, &scratch).unwrap();
+        assert!(p.contains("changed"));
+        assert!(
+            !marker.exists(),
+            "a planted scratch repository must never influence the diff"
+        );
     }
 
     #[test]
@@ -297,5 +374,23 @@ mod tests {
             !marker.exists(),
             "nothing from the worker's tree may execute"
         );
+    }
+
+    #[test]
+    fn n4_a_flood_of_git_warnings_cannot_hang_the_builder() {
+        if !have_git() {
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let d = dirs(t.path());
+        // Thousands of files under `* text eol=crlf` make git warn about line endings once per file: far more than a pipe holds.
+        write(&d.tree, ".gitattributes", "* text eol=crlf\n");
+        for i in 0..4000 {
+            write(&d.tree, &format!("docs/many/f{i}.txt"), "a\nb\n");
+        }
+        let start = std::time::Instant::now();
+        let p = make_patch(&d, &t.path().join("scratch")).unwrap();
+        assert!(p.contains("docs/many/f0.txt"));
+        assert!(start.elapsed() < std::time::Duration::from_secs(100));
     }
 }

@@ -54,10 +54,10 @@ enum Cmd {
         /// Task name (a directory under --tasks-root).
         task: String,
         /// Directory holding task directories.
-        #[arg(long, default_value = "/opt/runner/tasks")]
+        #[arg(long, default_value = "tasks")]
         tasks_root: PathBuf,
         /// Output directory.
-        #[arg(long, default_value = "/out")]
+        #[arg(long, default_value = "out")]
         out: PathBuf,
         /// Which boundary to verify.
         #[arg(long, value_enum, default_value = "container")]
@@ -163,6 +163,11 @@ fn run() -> Result<i32, errand_kit::ErrandError> {
                     }
                     for g in rec.gates.iter().filter(|g| !g.ok) {
                         eprintln!("errand: gate {} failed: {}", g.name, g.detail);
+                    }
+                    // The hash on the process's own output, which a gate command cannot rewrite after the fact: a trusted phase
+                    // compares this with `patch.diff` in the (writable) output directory.
+                    if let Some(h) = rec.handback.as_ref().and_then(|h| h.patch_sha256.as_ref()) {
+                        eprintln!("errand: patch_sha256={h}");
                     }
                     Ok(rec.exit_code)
                 }

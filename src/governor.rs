@@ -1,7 +1,7 @@
 //! The usage governor: a pure function of a usage snapshot.
 //!
 //! The engine shares a plan with the humans using it, so it yields. The rule is **fail closed**: anything other than a
-//! fresh, complete, sane snapshot with every window under its ceiling means *deny*. (The Python reference engine let work
+//! fresh, complete, sane snapshot with every window under its ceiling means *deny*. (An earlier engine let work
 //! start when its state was stale; this module cannot, because "no information" is a deny reason of its own.)
 //!
 //! [`decide`] does no I/O and reads no clock: the caller supplies the report age and the current time.

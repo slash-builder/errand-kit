@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "QueueSnapshot",
-  "description": "The snapshot the engine publishes and Courier reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.",
+  "description": "The snapshot the engine publishes and a client app reads (`queue.json`). Unknown fields are ignored; optional fields are `null`.",
   "type": "object",
   "required": [
     "engine",
@@ -26,11 +26,27 @@
         }
       ]
     },
+    "repos": {
+      "description": "Repositories the engine can take work for.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/QueueRepo"
+      }
+    },
     "tickets": {
       "description": "Tickets.",
       "type": "array",
       "items": {
         "$ref": "#/definitions/QueueTicket"
+      }
+    },
+    "runs": {
+      "description": "Recent runs.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/QueueRun"
       }
     },
     "board_error": {
@@ -41,15 +57,27 @@
         "null"
       ]
     },
+    "chat": {
+      "description": "Chat readiness; absent on engines that predate it (a client treats that as unknown).",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/QueueChat"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "published_at": {
-      "description": "When the snapshot was published, epoch seconds.",
-      "type": "integer",
-      "format": "int64"
+      "description": "When the snapshot was published, epoch seconds. A NUMBER: real engines write a fractional clock reading.",
+      "type": "number",
+      "format": "double"
     }
   },
   "definitions": {
     "QueueEngine": {
-      "description": "The engine part of the queue snapshot Courier reads.",
+      "description": "The engine part of the queue snapshot a client app reads.",
       "type": "object",
       "required": [
         "live",
@@ -125,11 +153,78 @@
             "null"
           ],
           "format": "int64"
+        },
+        "ceilings": {
+          "description": "The ceilings the engine pauses at, when it reports them.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/QueueCeilings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "QueueCeilings": {
+      "description": "The usage ceilings the engine pauses at.",
+      "type": "object",
+      "properties": {
+        "five_hour": {
+          "description": "Five-hour ceiling, 0.0 to 1.0.",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "seven_day": {
+          "description": "Seven-day ceiling, 0.0 to 1.0.",
+          "default": null,
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "QueueRepo": {
+      "description": "A repository the engine can take work for.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "description": "`owner/name`.",
+          "type": "string"
+        },
+        "label": {
+          "description": "Display name.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "can_implement": {
+          "description": "Whether the engine may implement (not only refine) work here.",
+          "default": false,
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Whether the repository is enabled.",
+          "default": false,
+          "type": "boolean"
         }
       }
     },
     "QueueTicket": {
-      "description": "A ticket as Courier shows it.",
+      "description": "A ticket as a client app shows it.",
       "type": "object",
       "required": [
         "key",
@@ -221,6 +316,19 @@
               "type": "null"
             }
           ]
+        },
+        "needs_repo": {
+          "description": "True if the ticket needs a repository before it can be readied.",
+          "default": false,
+          "type": "boolean"
+        },
+        "suggested_repo": {
+          "description": "A repository the engine suggests for this ticket.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -259,6 +367,94 @@
             "string",
             "null"
           ]
+        }
+      }
+    },
+    "QueueRun": {
+      "description": "A recent run, as a client app lists it.",
+      "type": "object",
+      "required": [
+        "id",
+        "key"
+      ],
+      "properties": {
+        "id": {
+          "description": "Run id.",
+          "type": "string"
+        },
+        "key": {
+          "description": "The ticket key.",
+          "type": "string"
+        },
+        "lane": {
+          "description": "The lane it ran in.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executor": {
+          "description": "The executor.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "The run's state.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "QueueChat": {
+      "description": "Whether the engine can host chat sessions, and what is missing. No secrets.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Chat is switched on.",
+          "default": false,
+          "type": "boolean"
+        },
+        "credential": {
+          "description": "`present` or `missing`.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "description": "`clean`, `findings` or `unknown`.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "findings": {
+          "description": "Number of workspace findings.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "live_sessions": {
+          "description": "Live chat sessions.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "ready": {
+          "description": "Enabled, credentialed and clean.",
+          "default": false,
+          "type": "boolean"
         }
       }
     }

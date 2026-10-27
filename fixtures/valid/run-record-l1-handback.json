@@ -104,8 +104,8 @@
     "patch.diff"
   ],
   "handback": {
-    "ticket": "HOME-1",
-    "repo": "dlockamy/homelab-mfe-monorepo",
+    "ticket": "TICKET-1",
+    "repo": "example/app",
     "base": "8a15f68",
     "patch": "patch.diff",
     "files_changed": [
@@ -118,7 +118,8 @@
     "unverified": [
       "the patch has not been applied or built"
     ],
-    "next_human_step": "review the patch; nothing is pushed or merged automatically"
+    "next_human_step": "review the patch; nothing is pushed or merged automatically",
+    "patch_sha256": "3f1c0b7e9a2d4c5b8e6f7a1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f"
   },
   "exit_code": 0
 }

@@ -4,7 +4,7 @@
 //! Delivery asks the tracker whether the marker already exists, posts only if not, and records delivery only after reading
 //! the marker back. An unreadable or corrupt store sends nothing.
 //!
-//! Why the order matters (the bug this replaces): the Python engine replayed an entry after a delivery it had *counted* as
+//! Why the order matters (the bug this design exists to prevent): an earlier engine replayed an entry after a delivery it had *counted* as
 //! failed, and one Jira comment was posted five times. Here a failure never changes what is true on the tracker: the next
 //! run starts by asking the tracker, so a post that landed but reported an error is found by its marker and not repeated.
 //!
@@ -448,7 +448,7 @@ mod tests {
     #[derive(Default)]
     struct Flaky {
         inner: MemoryTracker,
-        /// Number of upcoming posts that land and then report an error (the Python bug's trigger).
+        /// Number of upcoming posts that land and then report an error (the replay bug's trigger).
         post_lands_then_errors: AtomicUsize,
         /// Number of upcoming posts that fail without landing.
         post_fails_cleanly: AtomicUsize,
@@ -599,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn python_bug_post_succeeds_but_errors_then_five_redeliveries_make_one_comment() {
+    fn replay_bug_post_succeeds_but_errors_then_five_redeliveries_make_one_comment() {
         let (_d, o) = store();
         let t = Flaky::new();
         t.post_lands_then_errors.store(1, Ordering::SeqCst);
