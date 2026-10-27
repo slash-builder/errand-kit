@@ -675,7 +675,15 @@ fn check_net_interfaces(proc_root: &Path) -> Check {
         .filter_map(|l| l.split_once(':').map(|(n, _)| n.trim()))
         .filter(|n| !n.is_empty())
         .collect();
-    let others = ifaces.iter().filter(|n| **n != "lo").count();
+    // The kernel creates fallback tunnel devices in every network namespace when their modules are loaded (Docker Desktop's
+    // VM does); they are down, carry no traffic and are not a sign of a shared network namespace.
+    const FALLBACK: &[&str] = &[
+        "tunl0", "gre0", "gretap0", "erspan0", "ip_vti0", "ip6_vti0", "sit0", "ip6tnl0", "ip6gre0",
+    ];
+    let others = ifaces
+        .iter()
+        .filter(|n| **n != "lo" && !FALLBACK.contains(*n))
+        .count();
     if others <= 1 {
         check(
             name,
@@ -1303,6 +1311,17 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
         assert!(r.ok, "{r:#?}");
         assert!(!get(&r, "cgroup_memory_limited").ok);
         assert!(!get(&r, "net_interfaces_minimal").ok);
+    }
+
+    #[test]
+    fn kernel_fallback_tunnel_devices_are_not_counted() {
+        let f = Fake::clean();
+        f.write(
+            "proc/net/dev",
+            "h\nh\n lo: 1\n tunl0: 0\n gre0: 0\n gretap0: 0\n erspan0: 0\n ip_vti0: 0\n ip6_vti0: 0\n sit0: 0\n ip6tnl0: 0\n ip6gre0: 0\n eth0: 1\n",
+        );
+        let r = f.report();
+        assert!(get(&r, "net_interfaces_minimal").ok);
     }
 
     #[test]
