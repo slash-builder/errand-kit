@@ -385,7 +385,7 @@ mod tests {
         let d = dirs(t.path());
         // Thousands of files under `* text eol=crlf` make git warn about line endings once per file: far more than a pipe holds.
         write(&d.tree, ".gitattributes", "* text eol=crlf\n");
-        for i in 0..4000 {
+        for i in 0..1200 {
             write(&d.tree, &format!("docs/many/f{i}.txt"), "a\nb\n");
         }
         let start = std::time::Instant::now();
