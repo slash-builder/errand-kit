@@ -395,7 +395,13 @@ pub struct CommandGate {
     pub cwd: std::path::PathBuf,
     /// Maximum wall time.
     pub timeout: std::time::Duration,
+    /// Use the Kit's own `PATH`. False (the default for recipes that do not opt in to executing tree code) uses the fixed system
+    /// path `/usr/bin:/bin`, so a program name cannot resolve to a directory the launcher or worker influenced.
+    pub inherit_path: bool,
 }
+
+/// The fixed search path for gate commands of recipes that only inspect.
+pub const FIXED_GATE_PATH: &str = "/usr/bin:/bin";
 
 // NOTE: building a `CommandGate` directly skips the recipe's inspect-only check; construct gates from a validated `Recipe`.
 impl Gate for CommandGate {
@@ -417,7 +423,14 @@ impl Gate for CommandGate {
             .args(args)
             .current_dir(&self.cwd)
             .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env(
+                "PATH",
+                if self.inherit_path {
+                    std::env::var_os("PATH").unwrap_or_default()
+                } else {
+                    std::ffi::OsString::from(FIXED_GATE_PATH)
+                },
+            )
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -643,6 +656,7 @@ mod tests {
             argv: argv.iter().map(|s| s.to_string()).collect(),
             cwd: std::env::temp_dir(),
             timeout: std::time::Duration::from_millis(ms),
+            inherit_path: true,
         };
         let c = ctx(&env, None, None, None, None);
         assert!(mk(&["true"], 2000).check(&c).ok);
@@ -667,10 +681,42 @@ mod tests {
             ],
             cwd: std::env::temp_dir(),
             timeout: std::time::Duration::from_secs(2),
+            inherit_path: true,
         };
         assert!(
             g.check(&ctx(&env, None, None, None, None)).ok,
             "the environment must be empty"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_inspect_only_gate_uses_the_fixed_path_not_the_inherited_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let tool = d.path().join("errand-only-here");
+        std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let old = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![d.path().to_path_buf()];
+        paths.extend(std::env::split_paths(&old));
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+        let env = BTreeMap::new();
+        let mk = |inherit_path| CommandGate {
+            index: 0,
+            argv: vec!["errand-only-here".into()],
+            cwd: std::env::temp_dir(),
+            timeout: std::time::Duration::from_secs(2),
+            inherit_path,
+        };
+        let c = ctx(&env, None, None, None, None);
+        let inherited = mk(true).check(&c).ok;
+        let fixed = mk(false).check(&c).ok;
+        std::env::set_var("PATH", old);
+        assert!(inherited, "an opted-in gate sees the Kit's PATH");
+        assert!(
+            !fixed,
+            "an inspect-only gate must not resolve names through the inherited PATH"
         );
     }
 
