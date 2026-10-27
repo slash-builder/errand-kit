@@ -3,7 +3,9 @@
 
 use schemars::schema_for;
 
-use crate::contract::{BoundaryReport, GovernorDecision, HandBack, OutboxEntry, QueueSnapshot, RunRecord};
+use crate::contract::{
+    BoundaryReport, GovernorDecision, HandBack, OutboxEntry, QueueSnapshot, RunRecord,
+};
 
 /// `(file name, pretty JSON)` for every schema in the contract.
 pub fn all() -> Vec<(&'static str, String)> {
@@ -14,10 +16,22 @@ pub fn all() -> Vec<(&'static str, String)> {
     vec![
         ("run-record.schema.json", pretty(&schema_for!(RunRecord))),
         ("hand-back.schema.json", pretty(&schema_for!(HandBack))),
-        ("boundary-report.schema.json", pretty(&schema_for!(BoundaryReport))),
-        ("outbox-entry.schema.json", pretty(&schema_for!(OutboxEntry))),
-        ("governor-decision.schema.json", pretty(&schema_for!(GovernorDecision))),
-        ("queue-snapshot.schema.json", pretty(&schema_for!(QueueSnapshot))),
+        (
+            "boundary-report.schema.json",
+            pretty(&schema_for!(BoundaryReport)),
+        ),
+        (
+            "outbox-entry.schema.json",
+            pretty(&schema_for!(OutboxEntry)),
+        ),
+        (
+            "governor-decision.schema.json",
+            pretty(&schema_for!(GovernorDecision)),
+        ),
+        (
+            "queue-snapshot.schema.json",
+            pretty(&schema_for!(QueueSnapshot)),
+        ),
     ]
 }
 
@@ -49,8 +63,12 @@ mod tests {
             write_all(&root().join("schema")).unwrap();
         }
         for (name, text) in all() {
-            let on_disk = std::fs::read_to_string(root().join("schema").join(name)).unwrap_or_default();
-            assert_eq!(on_disk, text, "{name} is out of date: run ERRAND_UPDATE_SCHEMAS=1 cargo test schema");
+            let on_disk =
+                std::fs::read_to_string(root().join("schema").join(name)).unwrap_or_default();
+            assert_eq!(
+                on_disk, text,
+                "{name} is out of date: run ERRAND_UPDATE_SCHEMAS=1 cargo test schema"
+            );
         }
     }
 
@@ -77,17 +95,26 @@ mod tests {
             for entry in std::fs::read_dir(root().join("fixtures").join(dir)).unwrap() {
                 let path = entry.unwrap().path();
                 let file = path.file_name().unwrap().to_str().unwrap().to_string();
-                let schema_name = schema_for_fixture(&file).unwrap_or_else(|| panic!("no schema for fixture {file}"));
-                let schema: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root().join("schema").join(schema_name)).unwrap()).unwrap();
-                let instance: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                let schema_name = schema_for_fixture(&file)
+                    .unwrap_or_else(|| panic!("no schema for fixture {file}"));
+                let schema: serde_json::Value = serde_json::from_str(
+                    &std::fs::read_to_string(root().join("schema").join(schema_name)).unwrap(),
+                )
+                .unwrap();
+                let instance: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
                 let validator = jsonschema::validator_for(&schema).unwrap();
                 let schema_ok = validator.is_valid(&instance);
                 let text = instance.to_string();
                 let types_ok = match schema_name {
                     "run-record.schema.json" => serde_json::from_str::<RunRecord>(&text).is_ok(),
                     "hand-back.schema.json" => serde_json::from_str::<HandBack>(&text).is_ok(),
-                    "outbox-entry.schema.json" => serde_json::from_str::<OutboxEntry>(&text).is_ok(),
-                    "governor-decision.schema.json" => serde_json::from_str::<GovernorDecision>(&text).is_ok(),
+                    "outbox-entry.schema.json" => {
+                        serde_json::from_str::<OutboxEntry>(&text).is_ok()
+                    }
+                    "governor-decision.schema.json" => {
+                        serde_json::from_str::<GovernorDecision>(&text).is_ok()
+                    }
                     _ => serde_json::from_str::<QueueSnapshot>(&text).is_ok(),
                 };
                 assert_eq!(schema_ok, want_valid, "{dir}/{file}: schema verdict");
@@ -101,7 +128,9 @@ mod tests {
     #[test]
     fn a_run_record_round_trips() {
         use crate::contract::RunRecord;
-        let text = std::fs::read_to_string(root().join("fixtures/valid/run-record-l1-handback.json")).unwrap();
+        let text =
+            std::fs::read_to_string(root().join("fixtures/valid/run-record-l1-handback.json"))
+                .unwrap();
         let rec: RunRecord = serde_json::from_str(&text).unwrap();
         let again: RunRecord = serde_json::from_str(&serde_json::to_string(&rec).unwrap()).unwrap();
         assert_eq!(rec, again);

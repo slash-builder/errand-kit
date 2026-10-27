@@ -22,6 +22,7 @@ pub mod error;
 pub mod gates;
 pub mod governor;
 pub mod outbox;
+pub mod patchmake;
 pub mod sandbox;
 pub mod schema;
 pub mod task;

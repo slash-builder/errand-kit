@@ -13,11 +13,19 @@ use crate::sandbox::credential_shaped;
 /// assert_eq!(errand_kit::gates::builtin::last_nonempty_line("  \n"), None);
 /// ```
 pub fn last_nonempty_line(text: &str) -> Option<&str> {
-    text.lines().map(|l| l.trim_end_matches('\r')).rfind(|l| !l.trim().is_empty())
+    text.lines()
+        .map(|l| l.trim_end_matches('\r'))
+        .rfind(|l| !l.trim().is_empty())
 }
 
 fn result(name: &str, kind: &str, ok: bool, hard: bool, detail: impl Into<String>) -> GateResult {
-    GateResult { name: name.into(), kind: kind.into(), ok, hard, detail: detail.into() }
+    GateResult {
+        name: name.into(),
+        kind: kind.into(),
+        ok,
+        hard,
+        detail: detail.into(),
+    }
 }
 
 /// Phase 2 passed.
@@ -36,10 +44,27 @@ impl Gate for BoundaryGate {
     }
     fn check(&self, ctx: &GateContext<'_>) -> GateResult {
         match ctx.boundary {
-            Some(b) if b.ok => result("boundary", "boundary", true, true, format!("{} boundary verified", b.kind)),
+            Some(b) if b.ok => result(
+                "boundary",
+                "boundary",
+                true,
+                true,
+                format!("{} boundary verified", b.kind),
+            ),
             Some(b) => {
-                let failed: Vec<&str> = b.checks.iter().filter(|c| c.required && !c.ok).map(|c| c.name.as_str()).collect();
-                result("boundary", "boundary", false, true, format!("required checks failed: {}", failed.join(", ")))
+                let failed: Vec<&str> = b
+                    .checks
+                    .iter()
+                    .filter(|c| c.required && !c.ok)
+                    .map(|c| c.name.as_str())
+                    .collect();
+                result(
+                    "boundary",
+                    "boundary",
+                    false,
+                    true,
+                    format!("required checks failed: {}", failed.join(", ")),
+                )
             }
             None => result("boundary", "boundary", false, true, "no boundary report"),
         }
@@ -61,11 +86,31 @@ impl Gate for EnvCleanGate {
         true
     }
     fn check(&self, ctx: &GateContext<'_>) -> GateResult {
-        let bad: Vec<&str> = ctx.worker_env.keys().map(String::as_str).filter(|k| credential_shaped(k)).collect();
+        let bad: Vec<&str> = ctx
+            .worker_env
+            .keys()
+            .map(String::as_str)
+            .filter(|k| credential_shaped(k))
+            .collect();
         if bad.is_empty() {
-            result("env_clean", "env_clean", true, true, "worker environment held no credential-shaped names")
+            result(
+                "env_clean",
+                "env_clean",
+                true,
+                true,
+                "worker environment held no credential-shaped names",
+            )
         } else {
-            result("env_clean", "env_clean", false, true, format!("credential-shaped names in the worker environment: {}", bad.join(", ")))
+            result(
+                "env_clean",
+                "env_clean",
+                false,
+                true,
+                format!(
+                    "credential-shaped names in the worker environment: {}",
+                    bad.join(", ")
+                ),
+            )
         }
     }
 }
@@ -89,16 +134,38 @@ impl Gate for ToolsMatchGate {
     }
     fn check(&self, ctx: &GateContext<'_>) -> GateResult {
         let Some(reported) = ctx.worker.and_then(|w| w.tools_reported.as_ref()) else {
-            return result("tools_match", "tools_match", true, true, "worker did not report its tools (not verified)");
+            return result(
+                "tools_match",
+                "tools_match",
+                true,
+                true,
+                "worker did not report its tools (not verified)",
+            );
         };
         let mut want = self.requested.clone();
         let mut got = reported.clone();
         want.sort();
         got.sort();
         if want == got {
-            result("tools_match", "tools_match", true, true, format!("tools are exactly: {}", want.join(", ")))
+            result(
+                "tools_match",
+                "tools_match",
+                true,
+                true,
+                format!("tools are exactly: {}", want.join(", ")),
+            )
         } else {
-            result("tools_match", "tools_match", false, true, format!("requested [{}] but the worker reported [{}]", want.join(", "), got.join(", ")))
+            result(
+                "tools_match",
+                "tools_match",
+                false,
+                true,
+                format!(
+                    "requested [{}] but the worker reported [{}]",
+                    want.join(", "),
+                    got.join(", ")
+                ),
+            )
         }
     }
 }
@@ -122,10 +189,22 @@ impl Gate for StatusLineGate {
             return result("status_line", "status_line", false, true, "no digest");
         };
         let Some(last) = last_nonempty_line(digest) else {
-            return result("status_line", "status_line", false, true, "the digest is empty");
+            return result(
+                "status_line",
+                "status_line",
+                false,
+                true,
+                "the digest is empty",
+            );
         };
         let Some(model) = Verdict::from_status_line(last) else {
-            return result("status_line", "status_line", false, true, "the digest does not end with an exact STATUS: OK or STATUS: ATTENTION line");
+            return result(
+                "status_line",
+                "status_line",
+                false,
+                true,
+                "the digest does not end with an exact STATUS: OK or STATUS: ATTENTION line",
+            );
         };
         match ctx.code_verdict {
             Some(code) if code != model => result(
@@ -133,10 +212,26 @@ impl Gate for StatusLineGate {
                 "status_line",
                 false,
                 true,
-                format!("the model said {} but the code computed {}", model.status_line().unwrap_or("?"), code.status_line().unwrap_or("?")),
+                format!(
+                    "the model said {} but the code computed {}",
+                    model.status_line().unwrap_or("?"),
+                    code.status_line().unwrap_or("?")
+                ),
             ),
-            Some(_) => result("status_line", "status_line", true, true, "the model's verdict matches the one computed in code"),
-            None => result("status_line", "status_line", true, true, "valid STATUS line (no code verdict to compare)"),
+            Some(_) => result(
+                "status_line",
+                "status_line",
+                true,
+                true,
+                "the model's verdict matches the one computed in code",
+            ),
+            None => result(
+                "status_line",
+                "status_line",
+                true,
+                true,
+                "valid STATUS line (no code verdict to compare)",
+            ),
         }
     }
 }
@@ -163,8 +258,111 @@ impl Gate for DiffScopeGate {
             return result("diff_scope", "diff_scope", true, true, "no patch");
         };
         match validate_patch(patch, &self.recipe) {
-            Ok(s) => result("diff_scope", "diff_scope", true, true, format!("{} file(s), +{} -{}", s.files.len(), s.added, s.removed)),
+            Ok(s) => result(
+                "diff_scope",
+                "diff_scope",
+                true,
+                true,
+                format!("{} file(s), +{} -{}", s.files.len(), s.added, s.removed),
+            ),
             Err(e) => result("diff_scope", "diff_scope", false, true, e.to_string()),
+        }
+    }
+}
+
+/// Run a recipe-defined command in the worker's tree, with an empty environment (only `PATH`) and a wall-clock limit.
+///
+/// The argv comes from the repo-side recipe, never from a tracker field or the worker. A gate command must only READ data in
+/// the tree (parse a file, count lines); it must never execute a file the worker could have written.
+#[derive(Debug, Clone)]
+pub struct CommandGate {
+    /// Position in the recipe's list, used in the gate's name.
+    pub index: usize,
+    /// The command and arguments.
+    pub argv: Vec<String>,
+    /// The directory to run in.
+    pub cwd: std::path::PathBuf,
+    /// Maximum wall time.
+    pub timeout: std::time::Duration,
+}
+
+impl Gate for CommandGate {
+    fn name(&self) -> &str {
+        "command"
+    }
+    fn kind(&self) -> &str {
+        "command"
+    }
+    fn hard(&self) -> bool {
+        true
+    }
+    fn check(&self, _ctx: &GateContext<'_>) -> GateResult {
+        let name = format!("command_{}", self.index);
+        let Some((program, args)) = self.argv.split_first() else {
+            return result(&name, "command", false, true, "empty command in the recipe");
+        };
+        let child = std::process::Command::new(program)
+            .args(args)
+            .current_dir(&self.cwd)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                return result(
+                    &name,
+                    "command",
+                    false,
+                    true,
+                    format!("could not start `{program}`: {e}"),
+                )
+            }
+        };
+        let deadline = std::time::Instant::now() + self.timeout;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => {
+                    return result(
+                        &name,
+                        "command",
+                        true,
+                        true,
+                        format!("`{}` exited 0", self.argv.join(" ")),
+                    );
+                }
+                Ok(Some(status)) => {
+                    return result(
+                        &name,
+                        "command",
+                        false,
+                        true,
+                        format!(
+                            "`{}` exited {}",
+                            self.argv.join(" "),
+                            status.code().unwrap_or(-1)
+                        ),
+                    );
+                }
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return result(
+                        &name,
+                        "command",
+                        false,
+                        true,
+                        format!("`{}` timed out", self.argv.join(" ")),
+                    );
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(e) => {
+                    return result(&name, "command", false, true, format!("wait failed: {e}"))
+                }
+            }
         }
     }
 }
@@ -185,7 +383,16 @@ mod tests {
         boundary: Option<&'a BoundaryReport>,
         worker: Option<&'a WorkerReport>,
     ) -> GateContext<'a> {
-        GateContext { out_dir: Path::new("/out"), risk: Risk::L0, boundary, worker, worker_env: env, digest, code_verdict: code, patch: None }
+        GateContext {
+            out_dir: Path::new("/out"),
+            risk: Risk::L0,
+            boundary,
+            worker,
+            worker_env: env,
+            digest,
+            code_verdict: code,
+            patch: None,
+        }
     }
 
     #[test]
@@ -196,25 +403,64 @@ mod tests {
         let r = StatusLineGate.check(&ctx(&env, Some(d), None, None, None));
         assert!(!r.ok, "{r:?}");
         let d = "text\nSTATUS: ATTENTION\n\n";
-        assert!(StatusLineGate.check(&ctx(&env, Some(d), None, None, None)).ok);
+        assert!(
+            StatusLineGate
+                .check(&ctx(&env, Some(d), None, None, None))
+                .ok
+        );
     }
 
     #[test]
     fn status_line_must_be_exact() {
         let env = BTreeMap::new();
-        for bad in ["status: ok", "STATUS: OK.", "STATUS:OK", " STATUS: OK x", "STATUS: FAILED"] {
-            assert!(!StatusLineGate.check(&ctx(&env, Some(bad), None, None, None)).ok, "{bad:?}");
+        for bad in [
+            "status: ok",
+            "STATUS: OK.",
+            "STATUS:OK",
+            " STATUS: OK x",
+            "STATUS: FAILED",
+        ] {
+            assert!(
+                !StatusLineGate
+                    .check(&ctx(&env, Some(bad), None, None, None))
+                    .ok,
+                "{bad:?}"
+            );
         }
-        assert!(StatusLineGate.check(&ctx(&env, Some("x\r\nSTATUS: OK\r\n"), None, None, None)).ok);
+        assert!(
+            StatusLineGate
+                .check(&ctx(&env, Some("x\r\nSTATUS: OK\r\n"), None, None, None))
+                .ok
+        );
     }
 
     #[test]
     fn the_code_verdict_wins_and_a_disagreeing_model_fails_the_gate() {
         let env = BTreeMap::new();
-        let r = StatusLineGate.check(&ctx(&env, Some("STATUS: OK"), Some(Verdict::Attention), None, None));
+        let r = StatusLineGate.check(&ctx(
+            &env,
+            Some("STATUS: OK"),
+            Some(Verdict::Attention),
+            None,
+            None,
+        ));
         assert!(!r.ok && r.hard);
-        assert!(r.detail.contains("code computed STATUS: ATTENTION"), "{}", r.detail);
-        assert!(StatusLineGate.check(&ctx(&env, Some("STATUS: ATTENTION"), Some(Verdict::Attention), None, None)).ok);
+        assert!(
+            r.detail.contains("code computed STATUS: ATTENTION"),
+            "{}",
+            r.detail
+        );
+        assert!(
+            StatusLineGate
+                .check(&ctx(
+                    &env,
+                    Some("STATUS: ATTENTION"),
+                    Some(Verdict::Attention),
+                    None,
+                    None
+                ))
+                .ok
+        );
     }
 
     #[test]
@@ -223,7 +469,10 @@ mod tests {
         env.insert("PATH".to_string(), "/usr/bin".to_string());
         env.insert("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "tok".to_string());
         assert!(EnvCleanGate.check(&ctx(&env, None, None, None, None)).ok);
-        env.insert("AWS_SECRET_ACCESS_KEY".to_string(), "supersecretvalue".to_string());
+        env.insert(
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            "supersecretvalue".to_string(),
+        );
         let r = EnvCleanGate.check(&ctx(&env, None, None, None, None));
         assert!(!r.ok);
         assert!(r.detail.contains("AWS_SECRET_ACCESS_KEY"));
@@ -241,13 +490,75 @@ mod tests {
             exit_code: Some(0),
             duration_ms: Some(1),
         };
-        let g = ToolsMatchGate { requested: vec!["Read".into(), "Grep".into()] };
-        assert!(g.check(&ctx(&env, None, None, None, Some(&mk(Some(vec!["Grep", "Read"]))))).ok);
-        assert!(!g.check(&ctx(&env, None, None, None, Some(&mk(Some(vec!["Read", "Grep", "Bash"]))))).ok);
-        assert!(!g.check(&ctx(&env, None, None, None, Some(&mk(Some(vec!["Read"]))))).ok);
+        let g = ToolsMatchGate {
+            requested: vec!["Read".into(), "Grep".into()],
+        };
+        assert!(
+            g.check(&ctx(
+                &env,
+                None,
+                None,
+                None,
+                Some(&mk(Some(vec!["Grep", "Read"])))
+            ))
+            .ok
+        );
+        assert!(
+            !g.check(&ctx(
+                &env,
+                None,
+                None,
+                None,
+                Some(&mk(Some(vec!["Read", "Grep", "Bash"])))
+            ))
+            .ok
+        );
+        assert!(
+            !g.check(&ctx(&env, None, None, None, Some(&mk(Some(vec!["Read"])))))
+                .ok
+        );
         // A worker that cannot report is not a failure, but the detail says it was not verified.
         let r = g.check(&ctx(&env, None, None, None, Some(&mk(None))));
         assert!(r.ok && r.detail.contains("not verified"));
+    }
+
+    #[test]
+    fn command_gate_passes_fails_and_times_out() {
+        let env = BTreeMap::new();
+        let mk = |argv: &[&str], ms: u64| CommandGate {
+            index: 0,
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            cwd: std::env::temp_dir(),
+            timeout: std::time::Duration::from_millis(ms),
+        };
+        let c = ctx(&env, None, None, None, None);
+        assert!(mk(&["true"], 2000).check(&c).ok);
+        let r = mk(&["false"], 2000).check(&c);
+        assert!(!r.ok && r.detail.contains("exited 1"), "{r:?}");
+        let r = mk(&["sleep", "5"], 150).check(&c);
+        assert!(!r.ok && r.detail.contains("timed out"), "{r:?}");
+        assert!(!mk(&["definitely-not-a-program-xyz"], 500).check(&c).ok);
+        assert!(!mk(&[], 500).check(&c).ok);
+    }
+
+    #[test]
+    fn command_gate_runs_with_an_empty_environment() {
+        std::env::set_var("ERRAND_TEST_LEAK", "yes");
+        let env = BTreeMap::new();
+        let g = CommandGate {
+            index: 1,
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "test -z \"$ERRAND_TEST_LEAK\"".into(),
+            ],
+            cwd: std::env::temp_dir(),
+            timeout: std::time::Duration::from_secs(2),
+        };
+        assert!(
+            g.check(&ctx(&env, None, None, None, None)).ok,
+            "the environment must be empty"
+        );
     }
 
     #[test]
@@ -258,8 +569,18 @@ mod tests {
             ok: false,
             egress: "open".into(),
             checks: vec![
-                Check { name: "caps_zero".into(), ok: false, required: true, detail: "CapEff nonzero".into() },
-                Check { name: "net_interfaces_minimal".into(), ok: false, required: false, detail: "x".into() },
+                Check {
+                    name: "caps_zero".into(),
+                    ok: false,
+                    required: true,
+                    detail: "CapEff nonzero".into(),
+                },
+                Check {
+                    name: "net_interfaces_minimal".into(),
+                    ok: false,
+                    required: false,
+                    detail: "x".into(),
+                },
             ],
         };
         let r = BoundaryGate.check(&ctx(&env, None, None, Some(&b), None));

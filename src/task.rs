@@ -41,7 +41,10 @@ pub fn parse_env(text: &str) -> std::collections::BTreeMap<String, String> {
         }
         if let Some((k, v)) = line.split_once('=') {
             let v = v.trim();
-            let v = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(v);
+            let v = v
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(v);
             out.insert(k.trim().to_string(), v.to_string());
         }
     }
@@ -51,43 +54,79 @@ pub fn parse_env(text: &str) -> std::collections::BTreeMap<String, String> {
 impl Task {
     /// Load `<root>/<name>`. Refuses a name that is not a plain directory name, and any tool that no risk level allows.
     pub fn load(root: &Path, name: &str) -> Result<Task> {
-        if name.is_empty() || name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        if name.is_empty()
+            || name.contains('/')
+            || name.contains('\\')
+            || name == "."
+            || name == ".."
+        {
             return Err(ErrandError::Task(format!("invalid task name: {name:?}")));
         }
         let dir = root.join(name);
-        let read = |f: &str| std::fs::read_to_string(dir.join(f)).map_err(|e| ErrandError::io(dir.join(f), e));
+        let read = |f: &str| {
+            std::fs::read_to_string(dir.join(f)).map_err(|e| ErrandError::io(dir.join(f), e))
+        };
         let prompt = read("prompt.md")?;
         let env = parse_env(&read("task.env")?);
         let tools: Vec<String> = env
             .get("TASK_ALLOWED_TOOLS")
-            .map(|s| s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect())
+            .map(|s| {
+                s.split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
             .unwrap_or_default();
-        let max_turns = env.get("TASK_MAX_TURNS").and_then(|s| s.parse().ok()).unwrap_or(6);
+        let max_turns = env
+            .get("TASK_MAX_TURNS")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(6);
         let risk = derive_risk(&tools, env.get("TASK_RISK").map(String::as_str))?;
         let prepare = {
             let p = dir.join("prepare.sh");
             p.is_file().then_some(p)
         };
-        Ok(Task { name: name.to_string(), dir, prompt, tools, max_turns, risk, prepare })
+        Ok(Task {
+            name: name.to_string(),
+            dir,
+            prompt,
+            tools,
+            max_turns,
+            risk,
+            prepare,
+        })
     }
 }
 
 fn derive_risk(tools: &[String], declared: Option<&str>) -> Result<Risk> {
-    let fits = |r: Risk| tools.iter().all(|t| r.tools_allowed().contains(&t.as_str()));
+    let fits = |r: Risk| {
+        tools
+            .iter()
+            .all(|t| r.tools_allowed().contains(&t.as_str()))
+    };
     let derived = if fits(Risk::L0) {
         Risk::L0
     } else if fits(Risk::L1) {
         Risk::L1
     } else {
-        let bad: Vec<&str> = tools.iter().map(String::as_str).filter(|t| !Risk::L1.tools_allowed().contains(t)).collect();
-        return Err(ErrandError::Task(format!("tools not allowed at any risk level: {}", bad.join(", "))));
+        let bad: Vec<&str> = tools
+            .iter()
+            .map(String::as_str)
+            .filter(|t| !Risk::L1.tools_allowed().contains(t))
+            .collect();
+        return Err(ErrandError::Task(format!(
+            "tools not allowed at any risk level: {}",
+            bad.join(", ")
+        )));
     };
     match declared {
         None => Ok(derived),
         Some("L0") if derived == Risk::L0 => Ok(Risk::L0),
         Some("L1") => Ok(Risk::L1),
         Some("L2") => Ok(Risk::L2),
-        Some(other) => Err(ErrandError::Task(format!("TASK_RISK {other:?} is not valid for these tools"))),
+        Some(other) => Err(ErrandError::Task(format!(
+            "TASK_RISK {other:?} is not valid for these tools"
+        ))),
     }
 }
 
@@ -108,7 +147,11 @@ mod tests {
     #[test]
     fn loads_a_read_only_task_as_l0() {
         let t = tempfile::tempdir().unwrap();
-        make(&t.path().join("a"), "TASK_ALLOWED_TOOLS=\"Read,Grep,Glob\"\nTASK_MAX_TURNS=8\n", true);
+        make(
+            &t.path().join("a"),
+            "TASK_ALLOWED_TOOLS=\"Read,Grep,Glob\"\nTASK_MAX_TURNS=8\n",
+            true,
+        );
         let task = Task::load(t.path(), "a").unwrap();
         assert_eq!(task.risk, Risk::L0);
         assert_eq!(task.max_turns, 8);
@@ -136,7 +179,11 @@ mod tests {
     #[test]
     fn a_lower_declared_risk_cannot_hide_write_tools() {
         let t = tempfile::tempdir().unwrap();
-        make(&t.path().join("a"), "TASK_ALLOWED_TOOLS=Read,Edit\nTASK_RISK=L0\n", false);
+        make(
+            &t.path().join("a"),
+            "TASK_ALLOWED_TOOLS=Read,Edit\nTASK_RISK=L0\n",
+            false,
+        );
         assert!(Task::load(t.path(), "a").is_err());
     }
 

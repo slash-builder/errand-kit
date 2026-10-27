@@ -4,7 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Seconds since the Unix epoch (0 if the clock is before it).
 pub fn now_epoch() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Format epoch seconds as an RFC 3339 UTC timestamp, e.g. `2026-10-27T01:02:03Z`.

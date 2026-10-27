@@ -11,14 +11,17 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    BoundaryReport, GateResult, HandBack, Phase, PhaseRecord, Risk, RunRecord, Verdict, WorkerReport, SCHEMA_VERSION,
+    BoundaryReport, GateResult, HandBack, Phase, PhaseRecord, Risk, RunRecord, Verdict,
+    WorkerReport, SCHEMA_VERSION,
 };
 use crate::gates::builtin::{
-    last_nonempty_line, BoundaryGate, DiffScopeGate, EnvCleanGate, StatusLineGate, ToolsMatchGate,
+    last_nonempty_line, BoundaryGate, CommandGate, DiffScopeGate, EnvCleanGate, StatusLineGate,
+    ToolsMatchGate,
 };
 use crate::gates::patch::validate_patch;
 use crate::gates::recipe::Recipe;
 use crate::gates::{Gate, GateContext};
+use crate::patchmake::{make_patch, WorkDirs};
 use crate::sandbox::Sandbox;
 use crate::task::Task;
 use crate::time::{now_epoch, now_rfc3339};
@@ -33,7 +36,9 @@ pub const EXIT_GATE: i32 = 73;
 pub const EXIT_NO_DIGEST: i32 = 70;
 
 /// Environment variables a worker may inherit from its launcher. Everything else is dropped.
-pub const WORKER_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "TERM", "TZ"];
+pub const WORKER_ENV_ALLOWLIST: &[&str] = &[
+    "PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "TERM", "TZ",
+];
 
 /// What the model phase needs besides the task.
 pub struct ModelOptions<'a> {
@@ -51,6 +56,11 @@ pub struct ModelOptions<'a> {
     pub recipe: Option<Recipe>,
     /// Wall-clock limit for the worker.
     pub timeout: Duration,
+    /// For L1+: the pristine tree and the worker's tree. The Kit itself builds the patch from them in a scratch repository;
+    /// it never runs git inside the worker's directory.
+    pub work: Option<WorkDirs>,
+    /// Extra directories the worker may read (for example a read-only folder holding the ticket text).
+    pub extra_dirs: Vec<PathBuf>,
 }
 
 /// Phase 1: run the task's `prepare.sh` with the credentials this process was given. No model runs here.
@@ -59,7 +69,9 @@ pub struct ModelOptions<'a> {
 /// left behind; the model phase sees whatever was written.
 pub fn run_prepare(task: &Task, out_dir: &Path) -> Result<i32> {
     std::fs::create_dir_all(out_dir).map_err(|e| ErrandError::io(out_dir, e))?;
-    let Some(script) = &task.prepare else { return Ok(0) };
+    let Some(script) = &task.prepare else {
+        return Ok(0);
+    };
     let status = Command::new(script)
         .current_dir(&task.dir)
         .status()
@@ -84,9 +96,15 @@ pub fn read_code_verdict(out_dir: &Path) -> Option<Verdict> {
 }
 
 /// Build the complete environment of the worker: only allowlisted launcher variables plus its own token.
-pub fn worker_env(parent: &BTreeMap<String, String>, token: Option<&str>) -> BTreeMap<String, String> {
-    let mut env: BTreeMap<String, String> =
-        parent.iter().filter(|(k, _)| WORKER_ENV_ALLOWLIST.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+pub fn worker_env(
+    parent: &BTreeMap<String, String>,
+    token: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut env: BTreeMap<String, String> = parent
+        .iter()
+        .filter(|(k, _)| WORKER_ENV_ALLOWLIST.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     if let Some(t) = token {
         env.insert("CLAUDE_CODE_OAUTH_TOKEN".to_string(), t.to_string());
     }
@@ -94,12 +112,23 @@ pub fn worker_env(parent: &BTreeMap<String, String>, token: Option<&str>) -> BTr
 }
 
 fn phase(phase: Phase, ok: bool, started: String, note: Option<String>) -> PhaseRecord {
-    PhaseRecord { phase, ok, started_at: started, finished_at: now_rfc3339(), note }
+    PhaseRecord {
+        phase,
+        ok,
+        started_at: started,
+        finished_at: now_rfc3339(),
+        note,
+    }
 }
 
 fn list_artifacts(out_dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(out_dir)
-        .map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).filter_map(|e| e.file_name().into_string().ok()).collect())
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
         .unwrap_or_default();
     names.retain(|n| n != "run.json" && n != "digest.md");
     names.sort();
@@ -155,13 +184,22 @@ pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
     }
 
     // Risk and tools: the worker never gets more than the risk level allows.
-    if task.risk == Risk::L3 || task.tools.iter().any(|t| !task.risk.tools_allowed().contains(&t.as_str())) {
+    if task.risk == Risk::L3
+        || task
+            .tools
+            .iter()
+            .any(|t| !task.risk.tools_allowed().contains(&t.as_str()))
+    {
         rec.gates.push(GateResult {
             name: "tools_allowed".into(),
             kind: "tools_match".into(),
             ok: false,
             hard: true,
-            detail: format!("tools [{}] are not allowed at risk {}", task.tools.join(", "), task.risk),
+            detail: format!(
+                "tools [{}] are not allowed at risk {}",
+                task.tools.join(", "),
+                task.risk
+            ),
         });
         return finish(rec, out, EXIT_GATE);
     }
@@ -180,19 +218,30 @@ pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
 
     // Phase 3: the worker, with an empty environment plus the allowlist and its own token.
     let t = now_rfc3339();
+    // An L0 worker reads the output directory. An L1+ worker must NOT see it (it could overwrite files the engine reads): it gets
+    // its tree as the working directory plus any explicitly provided read-only folders.
+    let (cwd, add_dirs) = match &opts.work {
+        Some(w) if task.risk >= Risk::L1 => {
+            let mut dirs = vec![w.tree.clone()];
+            dirs.extend(opts.extra_dirs.iter().cloned());
+            (w.tree.clone(), dirs)
+        }
+        _ => (out.to_path_buf(), vec![PathBuf::from(out)]),
+    };
     let req = WorkerRequest {
         prompt: task.prompt.clone(),
         tools: task.tools.clone(),
         max_turns: task.max_turns,
-        cwd: out.to_path_buf(),
-        add_dirs: vec![PathBuf::from(out)],
+        cwd,
+        add_dirs,
         env: worker_environment.clone(),
         timeout: opts.timeout,
     };
     let output = match opts.worker.run(&req) {
         Ok(o) => o,
         Err(e) => {
-            rec.phases.push(phase(Phase::Worker, false, t, Some(e.to_string())));
+            rec.phases
+                .push(phase(Phase::Worker, false, t, Some(e.to_string())));
             rec.worker = Some(WorkerReport {
                 kind: opts.worker.kind().into(),
                 tools_requested: task.tools.clone(),
@@ -201,11 +250,18 @@ pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
                 exit_code: None,
                 duration_ms: None,
             });
-            rec.gates.push(GateResult { name: "worker".into(), kind: "command".into(), ok: false, hard: true, detail: e.to_string() });
+            rec.gates.push(GateResult {
+                name: "worker".into(),
+                kind: "command".into(),
+                ok: false,
+                hard: true,
+                detail: e.to_string(),
+            });
             return finish(rec, out, EXIT_NO_DIGEST);
         }
     };
-    rec.phases.push(phase(Phase::Worker, output.exit_code == 0, t, None));
+    rec.phases
+        .push(phase(Phase::Worker, output.exit_code == 0, t, None));
     let wr = WorkerReport {
         kind: opts.worker.kind().into(),
         tools_requested: task.tools.clone(),
@@ -219,13 +275,48 @@ pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
     std::fs::write(&digest_path, &output.text).map_err(|e| ErrandError::io(&digest_path, e))?;
     rec.digest = Some("digest.md".into());
     if output.text.trim().is_empty() {
-        rec.gates.push(GateResult { name: "digest".into(), kind: "status_line".into(), ok: false, hard: true, detail: "the worker returned no text".into() });
+        rec.gates.push(GateResult {
+            name: "digest".into(),
+            kind: "status_line".into(),
+            ok: false,
+            hard: true,
+            detail: "the worker returned no text".into(),
+        });
         return finish(rec, out, EXIT_NO_DIGEST);
     }
 
     // Phase 4: gates.
     let t = now_rfc3339();
-    let patch_text = if task.risk >= Risk::L1 { std::fs::read_to_string(out.join("patch.diff")).ok() } else { None };
+    let patch_text = if task.risk >= Risk::L1 {
+        match &opts.work {
+            Some(dirs) => {
+                let scratch = out.join(".scratch");
+                let built = make_patch(dirs, &scratch);
+                let _ = std::fs::remove_dir_all(&scratch);
+                match built {
+                    Ok(p) if p.is_empty() => None,
+                    Ok(p) => {
+                        let path = out.join("patch.diff");
+                        std::fs::write(&path, &p).map_err(|e| ErrandError::io(&path, e))?;
+                        Some(p)
+                    }
+                    Err(e) => {
+                        rec.gates.push(GateResult {
+                            name: "patch_build".into(),
+                            kind: "diff_scope".into(),
+                            ok: false,
+                            hard: true,
+                            detail: e.to_string(),
+                        });
+                        None
+                    }
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
     let ctx = GateContext {
         out_dir: out,
         risk: task.risk,
@@ -239,11 +330,26 @@ pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
     let mut gates: Vec<Box<dyn Gate>> = vec![
         Box::new(BoundaryGate),
         Box::new(EnvCleanGate),
-        Box::new(ToolsMatchGate { requested: task.tools.clone() }),
+        Box::new(ToolsMatchGate {
+            requested: task.tools.clone(),
+        }),
         Box::new(StatusLineGate),
     ];
     if let Some(recipe) = &opts.recipe {
-        gates.push(Box::new(DiffScopeGate { recipe: recipe.clone() }));
+        gates.push(Box::new(DiffScopeGate {
+            recipe: recipe.clone(),
+        }));
+        // Recipe gate commands run in the worker's tree. The commands come from the repo-side recipe, never from the worker.
+        if let Some(w) = &opts.work {
+            for (i, argv) in recipe.gate_commands.iter().enumerate() {
+                gates.push(Box::new(CommandGate {
+                    index: i,
+                    argv: argv.clone(),
+                    cwd: w.tree.clone(),
+                    timeout: Duration::from_secs(60),
+                }));
+            }
+        }
     }
     for g in &gates {
         rec.gates.push(g.check(&ctx));
@@ -252,7 +358,11 @@ pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
     rec.phases.push(phase(Phase::Gates, all_hard_ok, t, None));
 
     // Hand-back for L1+, built from the PATCH TEXT (what the Kit parsed), not from the worker's claims.
-    if let (true, Some(patch), Some(recipe)) = (task.risk >= Risk::L1, patch_text.as_deref(), opts.recipe.as_ref()) {
+    if let (true, Some(patch), Some(recipe)) = (
+        task.risk >= Risk::L1,
+        patch_text.as_deref(),
+        opts.recipe.as_ref(),
+    ) {
         if let Ok(summary) = validate_patch(patch, recipe) {
             rec.handback = Some(HandBack {
                 ticket: None,
@@ -262,8 +372,11 @@ pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
                 files_changed: summary.files,
                 summary: output.text.lines().take(12).collect::<Vec<_>>().join("\n"),
                 verified: vec!["patch passed the scope and protected-path checks".into()],
-                unverified: vec!["the patch has not been applied or built; no tests were run".into()],
-                next_human_step: "review the patch; nothing is pushed or merged automatically".into(),
+                unverified: vec![
+                    "the patch has not been applied or built; no tests were run".into()
+                ],
+                next_human_step: "review the patch; nothing is pushed or merged automatically"
+                    .into(),
             });
         }
     }
@@ -276,7 +389,9 @@ pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
     let (verdict, source) = match code_verdict {
         Some(v) => (v, "code"),
         None => {
-            let v = last_nonempty_line(&output.text).and_then(Verdict::from_status_line).unwrap_or(Verdict::Failed);
+            let v = last_nonempty_line(&output.text)
+                .and_then(Verdict::from_status_line)
+                .unwrap_or(Verdict::Failed);
             (v, "model")
         }
     };
@@ -320,7 +435,12 @@ mod tests {
                 kind: "container".into(),
                 ok: self.0,
                 egress: "open".into(),
-                checks: vec![Check { name: "caps_zero".into(), ok: self.0, required: true, detail: "test".into() }],
+                checks: vec![Check {
+                    name: "caps_zero".into(),
+                    ok: self.0,
+                    required: true,
+                    detail: "test".into(),
+                }],
             }
         }
     }
@@ -332,7 +452,11 @@ mod tests {
     }
     impl Canned {
         fn new(text: &str) -> Self {
-            Canned { text: text.into(), tools: None, seen: Mutex::new(vec![]) }
+            Canned {
+                text: text.into(),
+                tools: None,
+                seen: Mutex::new(vec![]),
+            }
         }
     }
     impl Worker for Canned {
@@ -341,7 +465,12 @@ mod tests {
         }
         fn run(&self, req: &WorkerRequest) -> Result<WorkerOutput> {
             self.seen.lock().unwrap().push(req.clone());
-            Ok(WorkerOutput { text: self.text.clone(), exit_code: 0, duration_ms: 5, tools_reported: self.tools.clone() })
+            Ok(WorkerOutput {
+                text: self.text.clone(),
+                exit_code: 0,
+                duration_ms: 5,
+                tools_reported: self.tools.clone(),
+            })
         }
     }
 
@@ -354,14 +483,34 @@ mod tests {
     }
 
     fn parent() -> BTreeMap<String, String> {
-        [("PATH", "/usr/bin"), ("AWS_SECRET_ACCESS_KEY", "leak-me"), ("GRAFANA_PASSWORD", "leak-me-too"), ("HOME", "/home/runner")]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+        [
+            ("PATH", "/usr/bin"),
+            ("AWS_SECRET_ACCESS_KEY", "leak-me"),
+            ("GRAFANA_PASSWORD", "leak-me-too"),
+            ("HOME", "/home/runner"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
     }
 
-    fn opts<'a>(out: &'a Path, sb: &'a dyn Sandbox, w: &'a dyn Worker, token: Option<&str>) -> ModelOptions<'a> {
-        ModelOptions { out_dir: out, sandbox: sb, worker: w, token: token.map(String::from), parent_env: parent(), recipe: None, timeout: Duration::from_secs(5) }
+    fn opts<'a>(
+        out: &'a Path,
+        sb: &'a dyn Sandbox,
+        w: &'a dyn Worker,
+        token: Option<&str>,
+    ) -> ModelOptions<'a> {
+        ModelOptions {
+            out_dir: out,
+            sandbox: sb,
+            worker: w,
+            token: token.map(String::from),
+            parent_env: parent(),
+            recipe: None,
+            timeout: Duration::from_secs(5),
+            work: None,
+            extra_dirs: vec![],
+        }
     }
 
     #[test]
@@ -375,7 +524,8 @@ mod tests {
         assert_eq!(rec.verdict_source, "model");
         assert_eq!(rec.exit_code, 0);
         assert!(out.join("run.json").is_file() && out.join("digest.md").is_file());
-        let back: RunRecord = serde_json::from_str(&std::fs::read_to_string(out.join("run.json")).unwrap()).unwrap();
+        let back: RunRecord =
+            serde_json::from_str(&std::fs::read_to_string(out.join("run.json")).unwrap()).unwrap();
         assert_eq!(back, rec);
     }
 
@@ -385,11 +535,20 @@ mod tests {
         let task = task(t.path(), "TASK_ALLOWED_TOOLS=Read\n");
         let out = t.path().join("out");
         let w = Canned::new("STATUS: OK");
-        run_model(&task, &opts(&out, &TestBoundary(true), &w, Some("my-token"))).unwrap();
+        run_model(
+            &task,
+            &opts(&out, &TestBoundary(true), &w, Some("my-token")),
+        )
+        .unwrap();
         let seen = w.seen.lock().unwrap();
         let env = &seen[0].env;
-        assert_eq!(env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str), Some("my-token"));
-        assert!(!env.contains_key("AWS_SECRET_ACCESS_KEY") && !env.contains_key("GRAFANA_PASSWORD"));
+        assert_eq!(
+            env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
+            Some("my-token")
+        );
+        assert!(
+            !env.contains_key("AWS_SECRET_ACCESS_KEY") && !env.contains_key("GRAFANA_PASSWORD")
+        );
         assert_eq!(env.get("PATH").map(String::as_str), Some("/usr/bin"));
     }
 
@@ -422,7 +581,10 @@ mod tests {
         // And when they agree, the source is the code.
         let w = Canned::new("look at this\nSTATUS: ATTENTION\n");
         let rec = run_model(&task, &opts(&out, &TestBoundary(true), &w, None)).unwrap();
-        assert_eq!((rec.verdict, rec.verdict_source.as_str(), rec.exit_code), (Verdict::Attention, "code", 3));
+        assert_eq!(
+            (rec.verdict, rec.verdict_source.as_str(), rec.exit_code),
+            (Verdict::Attention, "code", 3)
+        );
     }
 
     #[test]

@@ -11,8 +11,17 @@ pub mod none;
 
 /// Variable-name prefixes that mark a credential. A worker's environment, and every process visible to the worker, must
 /// contain none of these (`CLAUDE_CODE_OAUTH_TOKEN` is the worker's own token and is deliberately not listed).
-pub const CREDENTIAL_PREFIXES: &[&str] =
-    &["AWS_", "GITHUB_", "GH_", "CLOUDFLARE_", "TF_", "GRAFANA_", "SOL_", "ANTHROPIC_API", "DOCKER_"];
+pub const CREDENTIAL_PREFIXES: &[&str] = &[
+    "AWS_",
+    "GITHUB_",
+    "GH_",
+    "CLOUDFLARE_",
+    "TF_",
+    "GRAFANA_",
+    "SOL_",
+    "ANTHROPIC_API",
+    "DOCKER_",
+];
 
 /// True if a variable *name* looks like a credential.
 ///

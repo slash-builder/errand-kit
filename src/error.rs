@@ -47,6 +47,9 @@ pub type Result<T> = std::result::Result<T, ErrandError>;
 impl ErrandError {
     /// Wrap an `std::io::Error` with the path it concerns.
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Self::Io { path: path.into(), source }
+        Self::Io {
+            path: path.into(),
+            source,
+        }
     }
 }
