@@ -1256,6 +1256,9 @@ CapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
 
     #[test]
     fn a_missing_nosuid_nodev_is_reported_but_does_not_refuse_the_run() {
+        if running_as_root() {
+            return; // the read-only-root probe cannot be simulated as uid 0, so `r.ok` cannot hold in this fake
+        }
         for (opts, missing) in [
             ("rw,relatime", "nosuid,nodev"),
             ("rw,nosuid,relatime", "nodev"),

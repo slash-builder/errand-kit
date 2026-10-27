@@ -32,7 +32,7 @@ pipeline {
 
   environment {
     NEXUS_URL = 'https://nexus.softsurve.com'
-    CARGO_HOME = "${WORKSPACE}/.cargo"
+    CARGO_HOME = "/tmp/cargo-home"   // outside the workspace: nothing cargo caches (advisory db, registry) can end up in a package
     RELEASE_VERSION = "${params.VERSION}"
   }
 
