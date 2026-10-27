@@ -164,6 +164,11 @@ fn run() -> Result<i32, errand_kit::ErrandError> {
                     for g in rec.gates.iter().filter(|g| !g.ok) {
                         eprintln!("errand: gate {} failed: {}", g.name, g.detail);
                     }
+                    // The hash on the process's own output, which a gate command cannot rewrite after the fact: a trusted phase
+                    // compares this with `patch.diff` in the (writable) output directory.
+                    if let Some(h) = rec.handback.as_ref().and_then(|h| h.patch_sha256.as_ref()) {
+                        eprintln!("errand: patch_sha256={h}");
+                    }
                     Ok(rec.exit_code)
                 }
             }

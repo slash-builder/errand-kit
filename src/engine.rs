@@ -122,7 +122,8 @@ pub fn code_verdict_state(out_dir: &Path) -> CodeVerdict {
     }
 }
 
-/// The valid code verdict, if there is one (an absent or invalid file gives `None`; the engine itself treats invalid as a failure).
+/// The valid code verdict, if there is one. An absent file and an INVALID file both give `None`, so a caller that needs to tell
+/// them apart must use the engine, which treats an invalid file as a failure (a broken verdict is never "no verdict").
 pub fn read_code_verdict(out_dir: &Path) -> Option<Verdict> {
     match code_verdict_state(out_dir) {
         CodeVerdict::Valid(v) => Some(v),
@@ -200,9 +201,15 @@ fn list_artifacts(out_dir: &Path) -> Vec<String> {
 /// `run.json`) is written by the engine AFTER any recipe gate command has run, from values held in memory, so code a gate command
 /// executed cannot change what a human is shown; the patch's SHA-256 is recorded in the hand-back.
 pub fn run_model(task: &Task, opts: &ModelOptions<'_>) -> Result<RunRecord> {
+    // The run id names the worker's HOME. If the operating system cannot supply randomness the name would be predictable, so refuse.
+    let mut probe = [0u8; 8];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut probe))
+        .map_err(|e| ErrandError::io(Path::new("/dev/urandom"), e))?;
     let run_id = new_run_id(&task.name);
     let home = std::env::temp_dir().join(format!("errand-home-{run_id}"));
-    std::fs::create_dir_all(&home).map_err(|e| ErrandError::io(&home, e))?;
+    // `create_dir`, not `create_dir_all`: an existing directory (planted by someone else) is an error, never reused.
+    std::fs::create_dir(&home).map_err(|e| ErrandError::io(&home, e))?;
     let result = run_model_inner(task, opts, &run_id, &home);
     let _ = std::fs::remove_dir_all(&home);
     result
@@ -225,6 +232,10 @@ fn run_model_inner(
     home: &Path,
 ) -> Result<RunRecord> {
     let out = opts.out_dir;
+    // A recipe built in code gets the same checks as one loaded from a file.
+    if let Some(r) = &opts.recipe {
+        r.validate()?;
+    }
     std::fs::create_dir_all(out).map_err(|e| ErrandError::io(out, e))?;
     let mut rec = RunRecord {
         schema_version: SCHEMA_VERSION,
@@ -469,14 +480,36 @@ fn run_model_inner(
                 patch_sha256,
                 files_changed: summary.files,
                 summary: digest.lines().take(12).collect::<Vec<_>>().join("\n"),
-                verified: vec![
-                    "patch passed the scope and protected-path checks".into(),
-                    "the recipe's gate commands passed".into(),
-                ],
-                unverified: vec![
-                    "the patch has not been applied by the Kit; a consumer must verify patch.diff against patch_sha256".into(),
-                ],
-                next_human_step: "review the patch; nothing is pushed or merged automatically".into(),
+                verified: {
+                    let mut v =
+                        vec!["patch passed the scope and protected-path checks".to_string()];
+                    let cmds: Vec<_> = rec
+                        .gates
+                        .iter()
+                        .filter(|g| g.name.starts_with("command_"))
+                        .collect();
+                    if !cmds.is_empty() && cmds.iter().all(|g| g.ok) {
+                        v.push(format!(
+                            "the recipe's {} gate command(s) passed",
+                            cmds.len()
+                        ));
+                    }
+                    v
+                },
+                unverified: {
+                    let mut u = vec![
+                        "the patch has not been applied by the Kit; a consumer must verify patch.diff against patch_sha256".to_string(),
+                    ];
+                    if !rec.gates.iter().any(|g| g.name.starts_with("command_")) {
+                        u.push(
+                            "no recipe gate command ran (none defined, or an earlier gate failed)"
+                                .to_string(),
+                        );
+                    }
+                    u
+                },
+                next_human_step: "review the patch; nothing is pushed or merged automatically"
+                    .into(),
             });
         }
     }
@@ -795,6 +828,7 @@ mod tests {
             repo: "example/app".into(),
             scope: vec!["docs/**".into()],
             gate_commands,
+            gate_commands_execute_tree: true, // these tests use sh/touch to model hostile gate commands
             ..Default::default()
         };
         (task, WorkDirs { base, tree }, recipe, out)
@@ -986,6 +1020,58 @@ mod tests {
             hb.patch_sha256.as_deref(),
             Some(want.as_str()),
             "the hand-back binds the patch by hash"
+        );
+    }
+
+    #[test]
+    fn a_code_built_recipe_with_a_tree_executing_gate_is_refused_unless_it_opts_in() {
+        let t = tempfile::tempdir().unwrap();
+        let (task, work, mut recipe, out) = l1(t.path(), vec![vec!["cargo".into(), "test".into()]]);
+        recipe.gate_commands_execute_tree = false;
+        let w = Canned::new("STATUS: OK");
+        let e =
+            run_model(&task, &l1_opts(&out, &TestBoundary(true), &w, work, recipe)).unwrap_err();
+        assert!(e.to_string().contains("inspect-only"), "{e}");
+        assert!(w.seen.lock().unwrap().is_empty(), "the worker never ran");
+    }
+
+    #[test]
+    fn n5_the_hand_back_does_not_claim_gate_commands_passed_when_none_ran() {
+        if !have_git() {
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let (task, work, recipe, out) = l1(t.path(), vec![]);
+        let w = Writer::new(&[("docs/a.md", "one\ntwo\n")], "added a line\nSTATUS: OK\n");
+        let rec = run_model(&task, &l1_opts(&out, &TestBoundary(true), &w, work, recipe)).unwrap();
+        let hb = rec.handback.unwrap();
+        assert!(
+            !hb.verified.iter().any(|v| v.contains("gate command")),
+            "{:?}",
+            hb.verified
+        );
+        assert!(hb
+            .unverified
+            .iter()
+            .any(|u| u.contains("no recipe gate command ran")));
+    }
+
+    #[test]
+    fn n5_the_hand_back_names_the_gate_commands_that_did_pass() {
+        if !have_git() {
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let (task, work, recipe, out) = l1(t.path(), vec![vec!["true".into()]]);
+        let w = Writer::new(&[("docs/a.md", "one\ntwo\n")], "added a line\nSTATUS: OK\n");
+        let rec = run_model(&task, &l1_opts(&out, &TestBoundary(true), &w, work, recipe)).unwrap();
+        let hb = rec.handback.unwrap();
+        assert!(
+            hb.verified
+                .iter()
+                .any(|v| v.contains("1 gate command(s) passed")),
+            "{:?}",
+            hb.verified
         );
     }
 

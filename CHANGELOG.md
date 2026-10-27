@@ -14,3 +14,4 @@ and the crate follows [Semantic Versioning](https://semver.org/) (pre-1.0: a bre
 - A patch validator (symlinks, modes, binary, path tricks, protected and out-of-scope paths, size) and a patch builder that never runs
   git inside the worker's directory.
 - The `errand` command-line tool.
+- Recipe gate commands are limited to inspect-only programs unless the recipe sets `gate_commands_execute_tree`.

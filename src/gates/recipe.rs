@@ -27,6 +27,29 @@ use crate::{ErrandError, Result};
 /// Largest recipe file [`Recipe::load`] will read.
 const MAX_RECIPE_BYTES: u64 = 1024 * 1024;
 
+/// Programs a gate command may use without the recipe opting in to `gate_commands_execute_tree`: they read files and never
+/// execute them.
+pub const INSPECT_ONLY_PROGRAMS: &[&str] = &[
+    "test",
+    "[",
+    "grep",
+    "egrep",
+    "fgrep",
+    "diff",
+    "cmp",
+    "wc",
+    "cat",
+    "head",
+    "tail",
+    "sort",
+    "uniq",
+    "ls",
+    "stat",
+    "sha256sum",
+    "true",
+    "jq",
+];
+
 /// What a worker may change in one repository, and how to check it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -39,9 +62,17 @@ pub struct Recipe {
     /// Exact paths that are protected by default but allowed for this recipe.
     #[serde(default)]
     pub allow_protected: Vec<String>,
-    /// Gate commands (argv), each run with no network and no credentials; exit 0 expected.
+    /// Gate commands (argv), run by the Kit with an empty environment, no stdin and a timeout; exit 0 expected.
+    ///
+    /// A gate command runs in the Kit's process context, which can read the worker's own token. Unless
+    /// [`Recipe::gate_commands_execute_tree`] is true, only the inspect-only programs in [`INSPECT_ONLY_PROGRAMS`] are accepted.
     #[serde(default)]
     pub gate_commands: Vec<Vec<String>>,
+    /// Opt in to gate commands that can EXECUTE code from the worker's tree (`cargo test`, `npm test`, `make`, `python3`, ...).
+    /// Such a command is worker-controlled code running beside the worker's token with whatever egress the sandbox allows;
+    /// set this only when the recipe's `scope` cannot contain executable code, or the egress is closed. Default false.
+    #[serde(default)]
+    pub gate_commands_execute_tree: bool,
     /// Maximum files a patch may touch.
     #[serde(default)]
     pub max_files: Option<usize>,
@@ -92,6 +123,12 @@ impl Recipe {
                 return Err(ErrandError::Recipe(
                     "a gate command must have a non-empty program".into(),
                 ));
+            }
+            let program = argv.first().map(String::as_str).unwrap_or_default();
+            if !self.gate_commands_execute_tree && !INSPECT_ONLY_PROGRAMS.contains(&program) {
+                return Err(ErrandError::Recipe(format!(
+                    "gate command `{program}` is not an inspect-only program; set `gate_commands_execute_tree` to true to allow a command that can run code from the worker's tree"
+                )));
             }
         }
         Ok(())
@@ -229,7 +266,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let r = Recipe::load(write(
             &d,
-            r#"{"repo":"o/r","scope":["a/**"],"allow_protected":["Cargo.lock"],"gate_commands":[["cargo","test"]],"max_files":3,"max_lines":40}"#,
+            r#"{"repo":"o/r","scope":["a/**"],"allow_protected":["Cargo.lock"],"gate_commands":[["cargo","test"]],"gate_commands_execute_tree":true,"max_files":3,"max_lines":40}"#,
         ))
         .unwrap();
         assert_eq!(r.allow_protected, vec!["Cargo.lock"]);
@@ -238,6 +275,26 @@ mod tests {
             vec![vec!["cargo".to_string(), "test".to_string()]]
         );
         assert_eq!((r.max_files, r.max_lines), (Some(3), Some(40)));
+    }
+
+    #[test]
+    fn n1_a_gate_command_that_can_run_the_trees_code_needs_an_explicit_opt_in() {
+        let d = tempfile::tempdir().unwrap();
+        for prog in [
+            "cargo", "npm", "make", "python3", "sh", "bash", "node", "pytest",
+        ] {
+            let text = format!(r#"{{"repo":"o/r","gate_commands":[["{prog}","x"]]}}"#);
+            let e = Recipe::load(write(&d, &text)).unwrap_err().to_string();
+            assert!(e.contains("inspect-only"), "{prog}: {e}");
+            let text = format!(
+                r#"{{"repo":"o/r","gate_commands":[["{prog}","x"]],"gate_commands_execute_tree":true}}"#
+            );
+            Recipe::load(write(&d, &text)).unwrap();
+        }
+        for prog in INSPECT_ONLY_PROGRAMS {
+            let text = format!(r#"{{"repo":"o/r","gate_commands":[["{prog}","x"]]}}"#);
+            Recipe::load(write(&d, &text)).unwrap();
+        }
     }
 
     #[test]

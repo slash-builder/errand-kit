@@ -92,14 +92,19 @@ fn clear_except_git(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A `git` invocation with every configuration source switched off, run in `repo`.
-/// Largest output read from one `git` call. A diff over this is refused (the validator's own cap is the same size), so a huge or
-/// hostile worker tree cannot make the Kit buffer without limit.
-const MAX_GIT_OUTPUT: u64 = crate::gates::patch::MAX_PATCH_BYTES as u64 + 1;
+/// Longest a single `git` call may take. The worker controls the tree, so it controls how much work git has to do.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Longest output kept from a `git` call; git's own output is read from files, so a flood of warnings cannot fill a pipe and block.
+const GIT_OUTPUT_CAP: u64 = 64 * 1024 * 1024;
 
+/// A `git` invocation with every configuration source switched off, run in `repo`. Output goes to files in `scratch` (never
+/// to pipes, which a verbose git can fill and deadlock on) and the call is killed after [`GIT_TIMEOUT`].
 fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
     use std::io::Read;
-    use std::process::Stdio;
+    let out_path = scratch.join("git.stdout");
+    let err_path = scratch.join("git.stderr");
+    let out_file = std::fs::File::create(&out_path).map_err(|e| io(&out_path, e))?;
+    let err_file = std::fs::File::create(&err_path).map_err(|e| io(&err_path, e))?;
     let mut child = Command::new("git")
         .current_dir(repo)
         .env_clear()
@@ -118,6 +123,8 @@ fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
             "-c",
             "core.autocrlf=false",
             "-c",
+            "core.safecrlf=false",
+            "-c",
             "core.symlinks=true",
             "-c",
             "commit.gpgsign=false",
@@ -127,41 +134,45 @@ fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
             "user.email=errand@localhost",
         ])
         .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .stdout(out_file)
+        .stderr(err_file)
         .spawn()
         .map_err(|e| ErrandError::Patch(format!("could not run git: {e}")))?;
-    let mut out = Vec::new();
-    if let Some(so) = child.stdout.take() {
-        so.take(MAX_GIT_OUTPUT)
-            .read_to_end(&mut out)
-            .map_err(|e| ErrandError::Patch(format!("could not read git output: {e}")))?;
-    }
-    if out.len() as u64 >= MAX_GIT_OUTPUT {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(ErrandError::Patch(format!(
-            "git {} produced more than {} bytes of output; the change is too large",
-            args.first().copied().unwrap_or(""),
-            MAX_GIT_OUTPUT - 1
-        )));
-    }
-    let mut err = Vec::new();
-    if let Some(se) = child.stderr.take() {
-        let _ = se.take(64 * 1024).read_to_end(&mut err);
-    }
-    let status = child
-        .wait()
-        .map_err(|e| ErrandError::Patch(format!("could not wait for git: {e}")))?;
+    let deadline = std::time::Instant::now() + GIT_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ErrandError::Patch(format!(
+                    "git {} timed out after {}s",
+                    args.first().copied().unwrap_or(""),
+                    GIT_TIMEOUT.as_secs()
+                )));
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Err(e) => return Err(ErrandError::Patch(format!("could not wait for git: {e}"))),
+        }
+    };
+    let read = |p: &Path, cap: u64| -> Result<String> {
+        let mut buf = Vec::new();
+        std::fs::File::open(p)
+            .map_err(|e| io(p, e))?
+            .take(cap)
+            .read_to_end(&mut buf)
+            .map_err(|e| io(p, e))?;
+        Ok(String::from_utf8_lossy(&buf).into_owned())
+    };
     if !status.success() {
         return Err(ErrandError::Patch(format!(
             "git {} failed: {}",
             args.first().copied().unwrap_or(""),
-            String::from_utf8_lossy(&err).trim()
+            read(&err_path, 4096)?.trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&out).into_owned())
+    read(&out_path, GIT_OUTPUT_CAP)
 }
 
 /// Build a git-format patch of the differences between `dirs.base` and `dirs.tree`, using `scratch` (an empty or absent
@@ -363,5 +374,23 @@ mod tests {
             !marker.exists(),
             "nothing from the worker's tree may execute"
         );
+    }
+
+    #[test]
+    fn n4_a_flood_of_git_warnings_cannot_hang_the_builder() {
+        if !have_git() {
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let d = dirs(t.path());
+        // Thousands of files under `* text eol=crlf` make git warn about line endings once per file: far more than a pipe holds.
+        write(&d.tree, ".gitattributes", "* text eol=crlf\n");
+        for i in 0..4000 {
+            write(&d.tree, &format!("docs/many/f{i}.txt"), "a\nb\n");
+        }
+        let start = std::time::Instant::now();
+        let p = make_patch(&d, &t.path().join("scratch")).unwrap();
+        assert!(p.contains("docs/many/f0.txt"));
+        assert!(start.elapsed() < std::time::Duration::from_secs(100));
     }
 }

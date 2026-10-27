@@ -45,7 +45,14 @@ pub const CREDENTIAL_SUFFIXES: &[&str] = &[
 ];
 
 /// Exact variable names that are credentials without a telltale prefix or suffix.
-pub const CREDENTIAL_EXACT: &[&str] = &["SSH_AUTH_SOCK", "KUBECONFIG", "DATABASE_URL"];
+pub const CREDENTIAL_EXACT: &[&str] = &[
+    "SSH_AUTH_SOCK",
+    "SSH_ASKPASS",
+    "GIT_ASKPASS",
+    "GIT_CONFIG_PARAMETERS",
+    "KUBECONFIG",
+    "DATABASE_URL",
+];
 
 /// The one credential-shaped name a worker is allowed: its own login token.
 pub const WORKER_OWN_TOKEN: &str = "CLAUDE_CODE_OAUTH_TOKEN";
@@ -72,6 +79,7 @@ fn extra_prefixes() -> Vec<String> {
 /// assert!(credential_shaped("DB_PASSWORD"));
 /// assert!(credential_shaped("NPM_TOKEN"));
 /// assert!(credential_shaped("JIRA_API_TOKEN") && credential_shaped("SSH_AUTH_SOCK"));
+/// assert!(credential_shaped("npm_config__authToken") && credential_shaped("GIT_ASKPASS"));
 /// assert!(!credential_shaped("CLAUDE_CODE_OAUTH_TOKEN"));
 /// assert!(!credential_shaped("PATH"));
 /// ```
@@ -79,12 +87,14 @@ pub fn credential_shaped(name: &str) -> bool {
     if name == WORKER_OWN_TOKEN {
         return false;
     }
-    CREDENTIAL_EXACT.contains(&name)
-        || CREDENTIAL_PREFIXES.iter().any(|p| name.starts_with(p))
-        || CREDENTIAL_SUFFIXES.iter().any(|s| name.ends_with(s))
+    // Names are compared upper-cased: `npm_config__authToken` is as much a credential as `NPM_CONFIG__AUTHTOKEN`.
+    let n = name.to_ascii_uppercase();
+    CREDENTIAL_EXACT.contains(&n.as_str())
+        || CREDENTIAL_PREFIXES.iter().any(|p| n.starts_with(p))
+        || CREDENTIAL_SUFFIXES.iter().any(|s| n.ends_with(s))
         || extra_prefixes()
             .iter()
-            .any(|p| name.starts_with(p.as_str()))
+            .any(|p| n.starts_with(&p.to_ascii_uppercase()))
 }
 
 /// A way of confining a worker.
@@ -99,5 +109,27 @@ pub trait Sandbox {
     /// container is the boundary and the Kit only verifies it.
     fn wrap(&self, cmd: std::process::Command) -> std::process::Command {
         cmd
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_names_are_matched_case_insensitively_and_cover_git_helpers() {
+        for n in [
+            "npm_config__authToken",
+            "aws_secret_access_key",
+            "Db_Password",
+            "GIT_ASKPASS",
+            "SSH_ASKPASS",
+            "GIT_CONFIG_PARAMETERS",
+        ] {
+            assert!(credential_shaped(n), "{n}");
+        }
+        for n in ["PATH", "HOME", "LANG", "CLAUDE_CODE_OAUTH_TOKEN", "TERM"] {
+            assert!(!credential_shaped(n), "{n}");
+        }
     }
 }

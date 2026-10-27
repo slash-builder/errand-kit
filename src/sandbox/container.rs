@@ -526,13 +526,21 @@ fn exists_nofollow(p: &Path) -> bool {
 /// Look for a socket file (a runtime socket bind-mounted somewhere unusual, like `/tmp/docker.sock`) in the writable allowlisted
 /// directories. Bounded in depth and entries; symlinks are not followed.
 #[cfg(unix)]
-fn find_sockets(fs_root: &Path, allowlist: &[String]) -> Vec<String> {
+fn find_sockets(fs_root: &Path, allowlist: &[String]) -> (Vec<String>, bool) {
     use std::os::unix::fs::FileTypeExt;
     const MAX_DEPTH: usize = 4;
-    const MAX_ENTRIES: usize = 20_000;
+    const MAX_ENTRIES: usize = 400_000;
     let mut found = Vec::new();
     let mut seen = 0usize;
-    let mut stack: Vec<(PathBuf, usize, String)> = allowlist
+    // The writable allowlisted directories, plus the places a runtime or user-session socket lives. The small fixed roots are
+    // pushed LAST so they are scanned FIRST: a huge repository under /work must not be able to starve them of the entry budget.
+    let mut roots: Vec<String> = allowlist.to_vec();
+    for fixed in ["/run", "/var/run", "/tmp"] {
+        if !roots.iter().any(|r| r == fixed) {
+            roots.push(fixed.to_owned());
+        }
+    }
+    let mut stack: Vec<(PathBuf, usize, String)> = roots
         .iter()
         .map(|a| (fs_root.join(a.trim_start_matches('/')), 0, a.clone()))
         .collect();
@@ -541,7 +549,7 @@ fn find_sockets(fs_root: &Path, allowlist: &[String]) -> Vec<String> {
         for e in rd.flatten() {
             seen += 1;
             if seen > MAX_ENTRIES {
-                return found;
+                return (found, true);
             }
             let Ok(ft) = e.file_type() else { continue };
             let name = e.file_name().to_string_lossy().into_owned();
@@ -553,12 +561,12 @@ fn find_sockets(fs_root: &Path, allowlist: &[String]) -> Vec<String> {
             }
         }
     }
-    found
+    (found, false)
 }
 
 #[cfg(not(unix))]
-fn find_sockets(_fs_root: &Path, _allowlist: &[String]) -> Vec<String> {
-    Vec::new()
+fn find_sockets(_fs_root: &Path, _allowlist: &[String]) -> (Vec<String>, bool) {
+    (Vec::new(), false)
 }
 
 fn check_container_sockets(
@@ -590,8 +598,13 @@ fn check_container_sockets(
             }
         }
     }
-    for sock in find_sockets(fs_root, allowlist) {
+    let (socks, truncated) = find_sockets(fs_root, allowlist);
+    for sock in socks {
         found.push(format!("socket file {sock}"));
+    }
+    if truncated {
+        // An incomplete scan is not a clean scan: refuse rather than report "none found".
+        found.push("socket scan incomplete (too many entries)".to_owned());
     }
     found.sort();
     // The name only: DOCKER_HOST can carry credentials in its value.
