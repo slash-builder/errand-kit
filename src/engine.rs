@@ -447,6 +447,7 @@ fn run_model_inner(
                 argv: argv.clone(),
                 cwd: w.tree.clone(),
                 timeout: Duration::from_secs(60),
+                inherit_path: recipe.gate_commands_execute_tree,
             };
             rec.gates.push(g.check(&ctx));
         }

@@ -152,7 +152,24 @@ fn git(repo: &Path, scratch: &Path, args: &[&str]) -> Result<String> {
                     GIT_TIMEOUT.as_secs()
                 )));
             }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            Ok(None) => {
+                // The cap applies while git WRITES, not only when we read: a worker-controlled tree must not fill the scratch disk.
+                let big = |p: &Path| {
+                    std::fs::metadata(p)
+                        .map(|m| m.len() > GIT_OUTPUT_CAP)
+                        .unwrap_or(false)
+                };
+                if big(&out_path) || big(&err_path) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(ErrandError::Patch(format!(
+                        "git {} produced more than {} MiB of output",
+                        args.first().copied().unwrap_or(""),
+                        GIT_OUTPUT_CAP / (1024 * 1024)
+                    )));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             Err(e) => return Err(ErrandError::Patch(format!("could not wait for git: {e}"))),
         }
     };
