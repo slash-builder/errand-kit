@@ -1,0 +1,112 @@
+# CI for the Errand Kit on GitHub Actions. The gates live in scripts/ci.sh (fmt, clippy -D warnings, tests with default and
+# no default features, docs with warnings denied, cargo-deny, the hygiene gate and a package dry run), so contributors run the
+# same checks locally. The other jobs add the cross-platform tests, the MSRV check, the semver check and a non-blocking look at
+# the current stable compiler.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * 1"   # weekly: catches new advisories and toolchain changes
+
+permissions:
+  contents: read           # least privilege; jobs that need more declare it themselves
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The blocking gates run on the toolchain the crate declares (`rust-version`), so a new compiler lint cannot fail an unrelated
+  # change. The `stable` job below shows what the newest compiler thinks. This job covers lint, docs, supply chain (cargo-deny,
+  # which must be installed: REQUIRE_DENY=1), the hygiene script and the package dry run.
+  gates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: echo "version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["packages"][0]["rust_version"])')" >> "$GITHUB_OUTPUT"
+      - run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal --component rustfmt,clippy && rustup default "${{ steps.msrv.outputs.version }}"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-deny
+      - run: REQUIRE_DENY=1 bash scripts/ci.sh
+
+  # Tests on Linux (x86-64 and arm64) and macOS. Windows is not in the matrix: the sandbox backends, the container verifier and
+  # several tests are Unix-only (see the README: Linux containers and bubblewrap).
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: echo "version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["packages"][0]["rust_version"])')" >> "$GITHUB_OUTPUT"
+      - run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal && rustup default "${{ steps.msrv.outputs.version }}"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test --all-features --locked
+      - run: cargo test --no-default-features --locked
+
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: echo "version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["packages"][0]["rust_version"])')" >> "$GITHUB_OUTPUT"
+      - run: rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+      - run: cargo +${{ steps.msrv.outputs.version }} check --all-features --locked
+
+  semver:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-semver-checks
+      - run: cargo semver-checks       # compares against the latest version on crates.io; skipped by the tool before the first release
+
+  # Early warning, never blocking: lints and deprecations on the current stable compiler (weekly schedule included).
+  stable:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --all-features --locked
+
+  hygiene:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: No internal references, private submodules or agent context in a public repo
+        run: |
+          set -eu
+          if git ls-files | grep -E '(^|/)(AGENT\.md|CLAUDE\.md|\.gitmodules)$|^\.claude/'; then echo "forbidden file tracked"; exit 1; fi
+          if git grep -n -I -E 'softsurve\.com|192\.168\.[0-9]+\.[0-9]+|\bjbot\b|dlockamy/(vault|agents|skills|context)|lockamy-studios/' -- . ':!deny.toml' ':!.github/workflows/ci.yml' ':!scripts/hygiene.sh'; then echo "internal reference found"; exit 1; fi
