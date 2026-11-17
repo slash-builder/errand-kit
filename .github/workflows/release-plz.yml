@@ -1,0 +1,87 @@
+# Automated releases with release-plz. Replaces the tag-triggered release.yml (one publish path only).
+# Standard: context/rust-and-crates-io-standard.md section 5 (a release PR tool; Cargo.toml is the version source of truth).
+#
+#   push to main  ->  release-pr: opens or updates the release PR (version bump + changelog from Conventional Commits,
+#                     checked by cargo-semver-checks). Merging that PR is the deliberate act.
+#                 ->  plan: is the version in Cargo.toml missing from crates.io?  (cheap read-only check)
+#                 ->  release: only when due, in the protected `release` environment (reviewer approves), tags, publishes
+#                     by TRUSTED PUBLISHING (OIDC; no stored crates.io token) and creates the GitHub release.
+#
+# Prerequisites per crate (once): first publish by hand; then on crates.io register this repository, THIS workflow file
+# name (release-plz.yml) and the environment name (release) as the trusted publisher.
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: is a release due
+    runs-on: ubuntu-24.04
+    outputs:
+      due: ${{ steps.check.outputs.due }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: check
+        run: |
+          set -eu
+          read -r name version < <(cargo metadata --no-deps --format-version 1 --manifest-path Cargo.toml \
+            | python3 -c 'import sys,json; p=json.load(sys.stdin)["packages"][0]; print(p["name"], p["version"])')
+          code="$(curl -s -o /dev/null -w '%{http_code}' -A "release-plz-plan (github.com/${GITHUB_REPOSITORY})" \
+            "https://crates.io/api/v1/crates/${name}/${version}")"
+          case "$code" in
+            200) echo "${name} ${version} is already on crates.io: nothing to release"; echo "due=false" >> "$GITHUB_OUTPUT" ;;
+            404) echo "${name} ${version} is not on crates.io: a release is due"; echo "due=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "unexpected HTTP ${code} from crates.io"; exit 1 ;;
+          esac
+
+  release:
+    name: release (tag, publish, GitHub release)
+    needs: plan
+    if: needs.plan.outputs.due == 'true'
+    runs-on: ubuntu-24.04
+    environment: release            # required reviewers here; also the environment name registered as the trusted publisher
+    permissions:
+      contents: write               # create the tag and the GitHub release
+      id-token: write               # OIDC token that crates.io exchanges for a short-lived publish token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal
+      - uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5.148
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No CARGO_REGISTRY_TOKEN: trusted publishing.
+
+  release-pr:
+    name: release PR
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write               # push the release branch
+      pull-requests: write          # open and update the release PR
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal
+      - uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5.148
+        with:
+          command: release-pr
+        env:
+          # The default token opens the PR but GitHub does not start pull_request workflows for it:
+          # close and reopen the PR once to run the required checks (no secret), or swap in a GitHub App token later.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

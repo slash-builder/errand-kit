@@ -49,6 +49,8 @@ tests, `cargo-deny`, the hygiene check and a package dry run), tests on Linux (x
 minimum-supported-Rust check, `cargo-semver-checks`, and a DCO check. A non-blocking job also runs clippy and the tests on the
 current stable compiler as an early warning.
 
+Releases are automated with [release-plz](https://release-plz.dev): pushes to `main` open or update a release pull request that bumps the version and changelog from Conventional Commit titles (`feat:`, `fix:`, a `!` for a breaking change) and checks the bump with `cargo-semver-checks`. Merging that pull request releases the crate: a tag `vX.Y.Z` equal to the crate version, published to crates.io by trusted publishing from a protected environment.
+
 ## Pull request process
 
 1. Fork the repository and create a branch from `main`.

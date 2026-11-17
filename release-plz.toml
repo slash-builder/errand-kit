@@ -1,0 +1,9 @@
+# release-plz configuration for a single-crate Kit repo whose crate is in rust/.
+[workspace]
+# Tag vX.Y.Z equals the Cargo.toml version (standard section 5).
+git_tag_name = "v{{ version }}"
+git_release_enable = true
+# cargo-semver-checks decides whether the bump is large enough; a breaking change cannot ship as a patch.
+semver_check = true
+# Never publish a dirty tree.
+publish_allow_dirty = false
