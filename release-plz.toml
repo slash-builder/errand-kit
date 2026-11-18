@@ -1,4 +1,4 @@
-# release-plz configuration for a single-crate Kit repo whose crate is in rust/.
+# release-plz configuration for a single-crate Kit repository (the crate is at the repository root).
 [workspace]
 # Tag vX.Y.Z equals the Cargo.toml version (standard section 5).
 git_tag_name = "v{{ version }}"
