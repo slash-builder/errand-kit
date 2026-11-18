@@ -1,0 +1,37 @@
+# The release PR is written by a third-party tool (release-plz) holding a write token. A release changes only the version in
+# Cargo.toml, the lockfile and the changelog: fail loudly if a bot-opened PR changes anything else.
+name: release-pr-scope
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  release-pr-scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: A release PR changes only the version, the lockfile and the changelog
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -eu
+          if [ "$PR_USER" != "github-actions[bot]" ]; then echo "not opened by github-actions[bot]: nothing to check"; exit 0; fi
+          bad=0
+          for f in $(git diff --name-only "$BASE_SHA...$HEAD_SHA"); do
+            case "$f" in Cargo.toml|Cargo.lock|CHANGELOG.md) ;; *) echo "release PR changes an unexpected file: $f"; bad=1 ;; esac
+          done
+          if git diff -U0 "$BASE_SHA...$HEAD_SHA" -- Cargo.toml | grep -E '^[+-]' | grep -v -E '^(\+\+\+|---)' | grep -v -E '^[+-]version = "'; then
+            echo "release PR changes something in Cargo.toml other than the version"; bad=1
+          fi
+          lines="$(git diff -U0 "$BASE_SHA...$HEAD_SHA" -- Cargo.lock | grep -E '^[+-]' | grep -c -v -E '^(\+\+\+|---)' || true)"
+          if [ "$lines" -gt 2 ]; then echo "release PR changes $lines lines of Cargo.lock (expected only the crate's own version)"; bad=1; fi
+          [ "$bad" -eq 0 ]
