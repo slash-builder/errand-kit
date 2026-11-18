@@ -9,6 +9,8 @@
 #                     binary and no dependency build script ever runs while the token exists. Then it tags vX.Y.Z and creates the
 #                     GitHub release.
 #
+# If a release fails part-way, use "Re-run failed jobs" (not "Re-run all jobs"): publish is safe to repeat and finishes the tag.
+#
 # Prerequisites per crate (once): the first publish is by hand; then on crates.io register this repository, THIS workflow file
 # name (release-plz.yml) and the environment name (release) as the trusted publisher.
 name: release-plz
@@ -85,9 +87,12 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -eu
-          existing="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${VERSION}" --jq .sha 2>/dev/null || true)"
-          if [ -n "${existing}" ] && [ "${existing}" != "${GITHUB_SHA}" ]; then
-            echo "tag v${VERSION} already exists and points at ${existing}, not at ${GITHUB_SHA}: refusing to publish"; exit 1
+          # Branch on gh's exit status, not on its output: for a tag that does not exist the API answers 422 and gh still prints the
+          # error JSON on stdout, so capturing output with `|| true` would mistake "no such tag" for "a tag exists".
+          if existing="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${VERSION}" --jq .sha 2>/dev/null)"; then
+            if [ "${existing}" != "${GITHUB_SHA}" ]; then
+              echo "tag v${VERSION} already exists and points at ${existing}, not at ${GITHUB_SHA}: refusing to publish"; exit 1
+            fi
           fi
       - name: Already on crates.io? (makes a re-run safe)
         id: published
