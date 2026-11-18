@@ -26,10 +26,13 @@ jobs:
           set -eu
           if [ "$PR_USER" != "github-actions[bot]" ]; then echo "not opened by github-actions[bot]: nothing to check"; exit 0; fi
           bad=0
-          for f in $(git diff --name-only "$BASE_SHA...$HEAD_SHA"); do
+          # NUL-separated names, renames reported as a delete plus an add, so no file name can slip past the allow-list
+          while IFS= read -r -d '' f; do
             case "$f" in Cargo.toml|Cargo.lock|CHANGELOG.md) ;; *) echo "release PR changes an unexpected file: $f"; bad=1 ;; esac
-          done
-          if git diff -U0 "$BASE_SHA...$HEAD_SHA" -- Cargo.toml | grep -E '^[+-]' | grep -v -E '^(\+\+\+|---)' | grep -v -E '^[+-]version = "'; then
+          done < <(git diff --name-only -z --no-renames "$BASE_SHA...$HEAD_SHA")
+          # Only the crate's own `version = "..."` line (the first one in the file) may differ in Cargo.toml.
+          norm() { awk '!d && /^version = "/ {print "version = X"; d=1; next} {print}'; }
+          if ! diff <(git show "$BASE_SHA:Cargo.toml" | norm) <(git show "$HEAD_SHA:Cargo.toml" | norm) >/dev/null; then
             echo "release PR changes something in Cargo.toml other than the version"; bad=1
           fi
           lines="$(git diff -U0 "$BASE_SHA...$HEAD_SHA" -- Cargo.lock | grep -E '^[+-]' | grep -c -v -E '^(\+\+\+|---)' || true)"

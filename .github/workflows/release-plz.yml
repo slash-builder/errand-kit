@@ -81,17 +81,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Refuse to continue if the release tag already points at a different commit
+      - name: Claim the release tag atomically, before any credential is minted
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -eu
-          # Branch on gh's exit status, not on its output: for a tag that does not exist the API answers 422 and gh still prints the
-          # error JSON on stdout, so capturing output with `|| true` would mistake "no such tag" for "a tag exists".
-          if existing="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${VERSION}" --jq .sha 2>/dev/null)"; then
-            if [ "${existing}" != "${GITHUB_SHA}" ]; then
-              echo "tag v${VERSION} already exists and points at ${existing}, not at ${GITHUB_SHA}: refusing to publish"; exit 1
+          # Create the exact ref refs/tags/vX.Y.Z at the commit being released. GitHub refuses (422) if it already exists, so a tag
+          # created earlier by anything else cannot be silently reused. A re-run finds its own tag already on this commit and goes on.
+          # Only the exact tag namespace is ever consulted: a branch named vX.Y.Z cannot stand in for the tag.
+          if gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/v${VERSION}" -f sha="${GITHUB_SHA}" >/dev/null 2>&1; then
+            echo "created tag v${VERSION} at ${GITHUB_SHA}"
+          else
+            kind="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq .object.type)"
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq .object.sha)"
+            if [ "${kind}" = "commit" ] && [ "${sha}" = "${GITHUB_SHA}" ]; then
+              echo "tag v${VERSION} already points at this commit: continuing"
+            else
+              echo "tag v${VERSION} already exists as ${kind} ${sha}, not as commit ${GITHUB_SHA}: refusing to publish"; exit 1
             fi
           fi
       - name: Already on crates.io? (makes a re-run safe)
@@ -116,7 +123,7 @@ jobs:
         run: cargo publish --no-verify --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-      - name: Tag and GitHub release, then prove the tag is on the released commit
+      - name: GitHub release on the claimed tag, then prove the tag is still on the released commit
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.plan.outputs.version }}
@@ -125,9 +132,9 @@ jobs:
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
             echo "release v${VERSION} already exists"
           else
-            gh release create "v${VERSION}" --target "${GITHUB_SHA}" --title "v${VERSION}" --generate-notes
+            gh release create "v${VERSION}" --verify-tag --title "v${VERSION}" --generate-notes
           fi
-          tagged="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${VERSION}" --jq .sha)"
+          tagged="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq .object.sha)"
           [ "${tagged}" = "${GITHUB_SHA}" ] || { echo "tag v${VERSION} points at ${tagged}, not at ${GITHUB_SHA}"; exit 1; }
 
   release-pr:
