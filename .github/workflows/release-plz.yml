@@ -1,0 +1,163 @@
+# Automated releases with release-plz (one publish path: merge the release PR).
+#
+#   push to main  ->  release-pr: opens or updates the release PR (version bump + changelog from Conventional Commits,
+#                     checked by cargo-semver-checks). Merging that PR is the deliberate act. This job has no publish credentials.
+#                 ->  plan: is the version in Cargo.toml missing from crates.io? (read-only)
+#                 ->  verify: build, test and dry-run the package with NO publish credentials (only when a release is due).
+#                 ->  publish: in the protected `release` environment (reviewer approves). The only job with the OIDC token, and it
+#                     installs and compiles nothing (`cargo publish --no-verify` of the commit `verify` just checked): no third-party
+#                     binary and no dependency build script ever runs while the token exists. Then it tags vX.Y.Z and creates the
+#                     GitHub release.
+#
+# If a release fails part-way, use "Re-run failed jobs" (not "Re-run all jobs"): publish is safe to repeat and finishes the tag.
+#
+# Prerequisites per crate (once): the first publish is by hand; then on crates.io register this repository, THIS workflow file
+# name (release-plz.yml) and the environment name (release) as the trusted publisher.
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: is a release due
+    if: github.repository_owner == 'slash-builder'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      due: ${{ steps.check.outputs.due }}
+      name: ${{ steps.check.outputs.name }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: check
+        run: |
+          set -eu
+          read -r name version < <(cargo metadata --no-deps --format-version 1 \
+            | python3 -I -c 'import sys,json; p=json.load(sys.stdin)["packages"][0]; print(p["name"], p["version"])')
+          code="$(curl -s --max-time 20 --retry 3 --retry-delay 3 -o /dev/null -w '%{http_code}' -A "release-plz-plan (github.com/${GITHUB_REPOSITORY})" \
+            "https://crates.io/api/v1/crates/${name}/${version}")"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            200) echo "${name} ${version} is already on crates.io: nothing to release"; echo "due=false" >> "$GITHUB_OUTPUT" ;;
+            404) echo "${name} ${version} is not on crates.io: a release is due"; echo "due=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "unexpected HTTP ${code} from crates.io"; exit 1 ;;
+          esac
+
+  verify:
+    name: verify (no publish credentials)
+    needs: plan
+    if: needs.plan.outputs.due == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo test --locked
+      - run: cargo publish --dry-run --locked
+
+  publish:
+    name: publish (token-only job, installs nothing)
+    needs: [plan, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: release-plz-publish
+      cancel-in-progress: false
+    environment: release            # required reviewers; also the environment name registered as the trusted publisher
+    permissions:
+      contents: write               # create the tag and the GitHub release
+      id-token: write               # OIDC token that crates.io exchanges for a short-lived publish token
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Claim the release tag atomically, before any credential is minted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -eu
+          # Create the exact ref refs/tags/vX.Y.Z at the commit being released. GitHub refuses (422) if it already exists, so a tag
+          # created earlier by anything else cannot be silently reused. A re-run finds its own tag already on this commit and goes on.
+          # Only the exact tag namespace is ever consulted: a branch named vX.Y.Z cannot stand in for the tag.
+          if gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/v${VERSION}" -f sha="${GITHUB_SHA}" >/dev/null 2>&1; then
+            echo "created tag v${VERSION} at ${GITHUB_SHA}"
+          else
+            kind="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq .object.type)"
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq .object.sha)"
+            if [ "${kind}" = "commit" ] && [ "${sha}" = "${GITHUB_SHA}" ]; then
+              echo "tag v${VERSION} already points at this commit: continuing"
+            else
+              echo "tag v${VERSION} already exists as ${kind} ${sha}, not as commit ${GITHUB_SHA}: refusing to publish"; exit 1
+            fi
+          fi
+      - name: Already on crates.io? (makes a re-run safe)
+        id: published
+        env:
+          NAME: ${{ needs.plan.outputs.name }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -eu
+          code="$(curl -s --max-time 20 --retry 3 --retry-delay 3 -o /dev/null -w '%{http_code}' -A "release-plz-publish (github.com/${GITHUB_REPOSITORY})" \
+            "https://crates.io/api/v1/crates/${NAME}/${VERSION}")"
+          case "$code" in
+            200) echo "already=true" >> "$GITHUB_OUTPUT"; echo "${NAME} ${VERSION} is already on crates.io: skipping the upload, finishing the tag and release" ;;
+            404) echo "already=false" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "unexpected HTTP ${code} from crates.io"; exit 1 ;;
+          esac
+      - id: auth
+        if: steps.published.outputs.already == 'false'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - name: Publish the commit that verify checked (the runner's preinstalled Rust; no build, no script)
+        if: steps.published.outputs.already == 'false'
+        run: cargo publish --no-verify --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - name: GitHub release on the claimed tag, then prove the tag is still on the released commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -eu
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "release v${VERSION} already exists"
+          else
+            gh release create "v${VERSION}" --verify-tag --title "v${VERSION}" --generate-notes
+          fi
+          tagged="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq .object.sha)"
+          [ "${tagged}" = "${GITHUB_SHA}" ] || { echo "tag v${VERSION} points at ${tagged}, not at ${GITHUB_SHA}"; exit 1; }
+
+  release-pr:
+    name: release PR
+    if: github.repository_owner == 'slash-builder'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write               # push the release branch
+      pull-requests: write          # open and update the release PR
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal
+      - uses: release-plz/action@66b324fd6c72d05d2a08568492ecdd62bfb8a62b # v0.5.148
+        with:
+          command: release-pr
+        env:
+          # No publish credentials here. The default token opens the PR but GitHub does not start pull_request workflows for it:
+          # close and reopen the PR once to run the required checks (no secret), or swap in a GitHub App token later.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

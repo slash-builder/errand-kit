@@ -19,10 +19,14 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
         run: |
           set -eu
           missing=0
           for c in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
+            # The release PR is opened by github-actions[bot] and its commits carry no sign-off: exempt exactly those commits,
+            # and only on a PR that bot opened. Any other commit, including one that merely claims a bot name, needs a sign-off.
+            if [ "$PR_USER" = "github-actions[bot]" ] && [ "$(git show -s --format=%ae "$c")" = "41898282+github-actions[bot]@users.noreply.github.com" ]; then continue; fi
             if ! git show -s --format=%B "$c" | grep -qE '^Signed-off-by: .+ <.+@.+>$'; then
               echo "commit $c has no Signed-off-by line (use: git commit -s)"; missing=1
             fi
