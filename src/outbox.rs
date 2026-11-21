@@ -463,6 +463,10 @@ mod tests {
                 ..Default::default()
             }
         }
+        // `fetch_update` is deprecated since Rust 1.99 ("renamed to `try_update`"), but `try_update` only became stable in 1.95 and this
+        // crate's rust-version is 1.94, so it cannot be called here yet. Keep `fetch_update` and silence only this lint on this one
+        // function. Remove the allow and switch to `try_update` when rust-version is raised to 1.95 or later.
+        #[allow(deprecated)]
         fn take(counter: &AtomicUsize) -> bool {
             counter
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
